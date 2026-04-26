@@ -115,7 +115,7 @@ async function main(): Promise<void> {
     instructions:
       `# ${args.agentName}\n\n` +
       `You are ${args.agentName}, a personal NanoClaw agent for ${args.displayName}. ` +
-      'When the user first reaches out, introduce yourself briefly and invite them to chat. Keep replies concise.',
+      'Always reply in Korean unless the user explicitly asks for another language in quoted or transformed output. When the user first reaches out, introduce yourself briefly in Korean and invite them to chat. Keep replies concise.',
   });
 
   // 3. CLI messaging group + wiring.
@@ -155,9 +155,7 @@ async function main(): Promise<void> {
 
   console.log('');
   console.log('Init complete.');
-  console.log(
-    `  owner:   ${CLI_SYNTHETIC_USER_ID}${promotedToOwner ? ' (promoted on first owner)' : ''}`,
-  );
+  console.log(`  owner:   ${CLI_SYNTHETIC_USER_ID}${promotedToOwner ? ' (promoted on first owner)' : ''}`);
   console.log(`  agent:   ${ag.name} [${ag.id}] @ groups/${folder}`);
   console.log(`  channel: cli/${CLI_PLATFORM_ID}`);
   console.log('');

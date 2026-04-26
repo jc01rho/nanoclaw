@@ -13,6 +13,13 @@ cd "$PROJECT_ROOT"
 
 echo "=== NANOCLAW SETUP: INSTALL_DISCORD ==="
 
+# Resolve which remote carries the channels branch — handles forks where
+# upstream lives on a different remote than `origin`.
+# shellcheck source=setup/lib/channels-remote.sh
+source "$PROJECT_ROOT/setup/lib/channels-remote.sh"
+CHANNELS_REMOTE=$(resolve_channels_remote)
+CHANNELS_BRANCH="${CHANNELS_REMOTE}/channels"
+
 needs_install=false
 [[ -f src/channels/discord.ts ]] || needs_install=true
 grep -q "import './discord.js';" src/channels/index.ts || needs_install=true
@@ -26,10 +33,10 @@ if ! $needs_install; then
 fi
 
 echo "STEP: fetch-channels-branch"
-git fetch origin channels
+git fetch "$CHANNELS_REMOTE" channels
 
 echo "STEP: copy-files"
-git show origin/channels:src/channels/discord.ts > src/channels/discord.ts
+git show "${CHANNELS_BRANCH}:src/channels/discord.ts" > src/channels/discord.ts
 
 echo "STEP: register-import"
 if ! grep -q "import './discord.js';" src/channels/index.ts; then

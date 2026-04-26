@@ -13,7 +13,7 @@
  *                          channel flow). The CLI scratch agent is always
  *                          "Terminal Agent".
  *   NANOCLAW_SKIP          comma-separated step names to skip
- *                          (environment|container|onecli|auth|mounts|
+ *                          (environment|container|auth|mounts|
  *                           service|cli-agent|timezone|channel|verify|
  *                           first-chat)
  *
@@ -35,12 +35,9 @@ import { brightSelect } from './lib/bright-select.js';
 import { offerClaudeAssist } from './lib/claude-assist.js';
 import { runWindowedStep } from './lib/windowed-runner.js';
 import { getLaunchdLabel, getSystemdUnit } from '../src/install-slug.js';
-import {
-  claudeCliAvailable,
-  resolveTimezoneViaClaude,
-} from './lib/tz-from-claude.js';
+import { claudeCliAvailable, resolveTimezoneViaClaude } from './lib/tz-from-claude.js';
 import * as setupLog from './logs.js';
-import { ensureAnswer, fail, runQuietChild, runQuietStep } from './lib/runner.js';
+import { ensureAnswer, fail, runQuietStep } from './lib/runner.js';
 import { emit as phEmit } from './lib/diagnostics.js';
 import { brandBold, brandChip, dimWrap, fitToWidth, wrapForGutter } from './lib/theme.js';
 import { isValidTimezone } from '../src/timezone.js';
@@ -75,12 +72,7 @@ async function main(): Promise<void> {
   }
 
   if (!skip.has('container')) {
-    p.log.message(
-      dimWrap(
-        'Your assistant lives in its own sandbox. It can only see what you explicitly share.',
-        4,
-      ),
-    );
+    p.log.message(dimWrap('Your assistant lives in its own sandbox. It can only see what you explicitly share.', 4));
     p.log.message(
       dimWrap(
         'The first build pulls a base image and installs a few tools. On a fresh machine this usually takes 3–10 minutes.',
@@ -117,68 +109,6 @@ async function main(): Promise<void> {
     maybeReexecUnderSg();
   }
 
-  if (!skip.has('onecli')) {
-    p.log.message(
-      dimWrap(
-        'Your assistant never gets your API keys directly. The vault adds them to approved requests as they leave the sandbox.',
-        4,
-      ),
-    );
-
-    // Respect an existing OneCLI install. Re-running the installer would
-    // rebind the listener and knock any other app using that gateway
-    // offline — confirm with the user before doing that.
-    const existing = detectExistingOnecli();
-    let reuse = false;
-    if (existing) {
-      const choice = ensureAnswer(
-        await brightSelect({
-          message: `Found an existing OneCLI at ${existing.apiHost}. What would you like to do?`,
-          options: [
-            {
-              value: 'reuse',
-              label: 'Use the existing instance',
-              hint: 'recommended — keeps other apps bound to this vault working',
-            },
-            {
-              value: 'fresh',
-              label: 'Install a fresh instance for NanoClaw',
-              hint: 'reinstalls onecli; other apps may need to reconnect',
-            },
-          ],
-        }),
-      ) as 'reuse' | 'fresh';
-      setupLog.userInput('onecli_choice', choice);
-      reuse = choice === 'reuse';
-    }
-
-    const res = await runQuietStep(
-      'onecli',
-      {
-        running: reuse
-          ? 'Hooking up to your existing OneCLI…'
-          : "Setting up OneCLI, your agent's vault…",
-        done: 'OneCLI vault ready.',
-      },
-      reuse ? ['--reuse'] : [],
-    );
-    if (!res.ok) {
-      const err = res.terminal?.fields.ERROR;
-      if (err === 'onecli_not_on_path_after_install') {
-        await fail(
-          'onecli',
-          'OneCLI was installed but your shell needs to refresh to see it.',
-          'Open a new shell or run `export PATH="$HOME/.local/bin:$PATH"`, then retry.',
-        );
-      }
-      await fail(
-        'onecli',
-        `Couldn't set up OneCLI (${err ?? 'unknown error'}).`,
-        'Make sure curl is installed and ~/.local/bin is writable, then retry.',
-      );
-    }
-  }
-
   if (!skip.has('auth')) {
     await runAuthStep();
   }
@@ -204,19 +134,12 @@ async function main(): Promise<void> {
       done: 'NanoClaw is running.',
     });
     if (!res.ok) {
-      await fail(
-        'service',
-        "Couldn't start NanoClaw.",
-        'See logs/nanoclaw.error.log for details.',
-      );
+      await fail('service', "Couldn't start NanoClaw.", 'See logs/nanoclaw.error.log for details.');
     }
     if (res.terminal?.fields.DOCKER_GROUP_STALE === 'true') {
-      p.log.warn(
-        "NanoClaw's permissions need a tweak before it can reach Docker.",
-      );
+      p.log.warn("NanoClaw's permissions need a tweak before it can reach Docker.");
       p.log.message(
-        '  sudo setfacl -m u:$(whoami):rw /var/run/docker.sock\n' +
-          `  systemctl --user restart ${getSystemdUnit()}`,
+        '  sudo setfacl -m u:$(whoami):rw /var/run/docker.sock\n' + `  systemctl --user restart ${getSystemdUnit()}`,
       );
     }
   }
@@ -281,7 +204,7 @@ async function main(): Promise<void> {
           msg:
             ping === 'socket_error'
               ? "NanoClaw service isn't listening on its CLI socket."
-              : "No reply from the assistant within 30 seconds.",
+              : 'No reply from the assistant within 30 seconds.',
           hint:
             ping === 'socket_error'
               ? 'Socket at data/cli.sock did not accept a connection.'
@@ -295,8 +218,7 @@ async function main(): Promise<void> {
     await runTimezoneStep();
   }
 
-  let channelChoice: 'telegram' | 'discord' | 'whatsapp' | 'teams' | 'skip' =
-    'skip';
+  let channelChoice: 'telegram' | 'discord' | 'whatsapp' | 'teams' | 'skip' = 'skip';
   if (!skip.has('channel')) {
     channelChoice = await askChannelChoice();
     if (channelChoice === 'telegram') {
@@ -326,7 +248,7 @@ async function main(): Promise<void> {
     if (!res.ok) {
       const notes: string[] = [];
       if (res.terminal?.fields.CREDENTIALS !== 'configured') {
-        notes.push('• Your Claude account isn\'t connected. Re-run setup and try again.');
+        notes.push("• Your Claude account isn't connected. Re-run setup and try again.");
       }
       const service = res.terminal?.fields.SERVICE;
       if (service === 'running_other_checkout') {
@@ -352,7 +274,9 @@ async function main(): Promise<void> {
         }
       }
       if (!res.terminal?.fields.CONFIGURED_CHANNELS) {
-        notes.push('• Want to chat from your phone? Add a messaging app with `/add-telegram`, `/add-slack`, or `/add-discord`.');
+        notes.push(
+          '• Want to chat from your phone? Add a messaging app with `/add-telegram`, `/add-slack`, or `/add-discord`.',
+        );
       }
       if (notes.length > 0) {
         p.note(notes.join('\n'), "What's left");
@@ -386,9 +310,7 @@ async function main(): Promise<void> {
     ['Open Claude Code:', 'claude'],
   ];
   const labelWidth = Math.max(...rows.map(([l]) => l.length));
-  const nextSteps = rows
-    .map(([l, c]) => `${k.cyan(l.padEnd(labelWidth))}  ${c}`)
-    .join('\n');
+  const nextSteps = rows.map(([l, c]) => `${k.cyan(l.padEnd(labelWidth))}  ${c}`).join('\n');
   p.note(nextSteps, 'Try these');
 
   // Always-on warning goes before the "check your DMs" directive so the
@@ -410,19 +332,14 @@ async function main(): Promise<void> {
     // that the welcome-message signal was too easy to miss. Use p.note so it
     // renders with a visible box, cyan-bold the directive line, and put it
     // as the last thing before outro.
-    p.note(
-      `${brandBold('→')} ${k.bold(`Check your ${dmTarget} — your assistant is saying hi.`)}`,
-      'Go say hi',
-    );
+    p.note(`${brandBold('→')} ${k.bold(`Check your ${dmTarget} — your assistant is saying hi.`)}`, 'Go say hi');
     p.outro(k.green("You're set."));
   } else {
     p.outro(k.green("You're ready! Chat with `pnpm run chat hi`."));
   }
 }
 
-function channelDmLabel(
-  choice: 'telegram' | 'discord' | 'whatsapp' | 'teams' | 'skip',
-): string | null {
+function channelDmLabel(choice: 'telegram' | 'discord' | 'whatsapp' | 'teams' | 'skip'): string | null {
   switch (choice) {
     case 'telegram':
       return 'Telegram';
@@ -466,9 +383,7 @@ async function confirmAssistantResponds(): Promise<PingResult> {
     s.stop(`${k.bold(fitToWidth('Your assistant is ready.', suffix))}${k.dim(suffix)}`);
   } else {
     const msg =
-      result === 'socket_error'
-        ? "Couldn't reach the NanoClaw service."
-        : "Your assistant didn't reply in time.";
+      result === 'socket_error' ? "Couldn't reach the NanoClaw service." : "Your assistant didn't reply in time.";
     s.stop(`${k.bold(fitToWidth(msg, suffix))}${k.dim(suffix)}`, 1);
   }
   return result;
@@ -524,9 +439,7 @@ async function runFirstChat(): Promise<void> {
         message: first
           ? 'Try a quick hello — or press Enter to continue setup'
           : 'Another message? Press Enter to continue setup',
-        placeholder: first
-          ? 'e.g. "hi, what can you do?"'
-          : 'press Enter to continue',
+        placeholder: first ? 'e.g. "hi, what can you do?"' : 'press Enter to continue',
       }),
     );
     first = false;
@@ -542,11 +455,9 @@ function sendChatMessage(message: string): Promise<void> {
     // agent's reply reads as a clean block under the prompt. Splitting on
     // whitespace mirrors `pnpm run chat hello world` — chat.ts joins argv
     // with spaces on the far side.
-    const child = spawn(
-      'pnpm',
-      ['--silent', 'run', 'chat', ...message.split(/\s+/)],
-      { stdio: ['ignore', 'inherit', 'inherit'] },
-    );
+    const child = spawn('pnpm', ['--silent', 'run', 'chat', ...message.split(/\s+/)], {
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
     child.on('close', () => resolve());
     child.on('error', () => resolve());
   });
@@ -594,15 +505,11 @@ async function runAuthStep(): Promise<void> {
 }
 
 async function runSubscriptionAuth(): Promise<void> {
-  p.log.step("Opening the Claude sign-in flow…");
-  console.log(
-    k.dim('   (a browser will open for sign-in; this part is interactive)'),
-  );
+  p.log.step('Opening the Claude sign-in flow…');
+  console.log(k.dim('   (a browser will open for sign-in; this part is interactive)'));
   console.log();
   const start = Date.now();
-  const code = await runInheritScript('bash', [
-    'setup/register-claude-token.sh',
-  ]);
+  const code = await runInheritScript('bash', ['setup/register-claude-token.sh']);
   const durationMs = Date.now() - start;
   console.log();
   if (code !== 0) {
@@ -638,29 +545,19 @@ async function runPasteAuth(method: 'oauth' | 'api'): Promise<void> {
   );
   const token = (answer as string).trim();
 
-  const res = await runQuietChild(
+  const res = await runQuietStep(
     'auth',
-    'onecli',
-    [
-      'secrets', 'create',
-      '--name', 'Anthropic',
-      '--type', 'anthropic',
-      '--value', token,
-      '--host-pattern', 'api.anthropic.com',
-    ],
     {
-      running: `Saving your ${label} to your OneCLI vault…`,
+      running: `Saving your ${label} to .env…`,
       done: 'Claude account connected.',
     },
-    {
-      extraFields: { METHOD: method },
-    },
+    ['--create', '--force', '--value', token],
   );
   if (!res.ok) {
     await fail(
       'auth',
-      `Couldn't save your ${label} to the vault.`,
-      'Make sure OneCLI is running (`onecli version`), then retry.',
+      `Couldn't save your ${label} to .env.`,
+      'Check that the repository .env file is writable, then retry.',
     );
   }
 }
@@ -685,10 +582,7 @@ async function runTimezoneStep(): Promise<void> {
   const fields = res.terminal?.fields ?? {};
   const resolvedTz = fields.RESOLVED_TZ;
   const needsInput = fields.NEEDS_USER_INPUT === 'true';
-  const isUtc =
-    resolvedTz === 'UTC' ||
-    resolvedTz === 'Etc/UTC' ||
-    resolvedTz === 'Universal';
+  const isUtc = resolvedTz === 'UTC' || resolvedTz === 'Etc/UTC' || resolvedTz === 'Universal';
 
   // Three branches:
   //   - no TZ detected: ask where they are (or leave as UTC)
@@ -710,8 +604,8 @@ async function runTimezoneStep(): Promise<void> {
   const message = needsInput
     ? "Your system didn't expose a timezone. Which one are you in?"
     : !isUtc
-      ? "Where are you, then?"
-      : "Your system reports UTC as the timezone. Is that right, or are you somewhere else?";
+      ? 'Where are you, then?'
+      : 'Your system reports UTC as the timezone. Is that right, or are you somewhere else?';
 
   // For the non-UTC "detected-but-wrong" branch we skip the select and jump
   // straight to the free-text prompt — the user already said "not that".
@@ -738,7 +632,7 @@ async function runTimezoneStep(): Promise<void> {
 
   const answer = ensureAnswer(
     await p.text({
-      message: "Where are you? (city, region, or IANA zone)",
+      message: 'Where are you? (city, region, or IANA zone)',
       placeholder: 'e.g. New York, London, Asia/Tokyo',
       validate: (v) => (v && v.trim() ? undefined : 'Required'),
     }),
@@ -807,9 +701,7 @@ async function askDisplayName(fallback: string): Promise<string> {
   return value;
 }
 
-async function askChannelChoice(): Promise<
-  'telegram' | 'discord' | 'whatsapp' | 'teams' | 'skip'
-> {
+async function askChannelChoice(): Promise<'telegram' | 'discord' | 'whatsapp' | 'teams' | 'skip'> {
   const choice = ensureAnswer(
     await brightSelect({
       message: 'Want to chat with your assistant from your phone?',
@@ -829,59 +721,6 @@ async function askChannelChoice(): Promise<
 
 // ─── interactive / env helpers ─────────────────────────────────────────
 
-function anthropicSecretExists(): boolean {
-  try {
-    const res = spawnSync('onecli', ['secrets', 'list'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    if (res.status !== 0) return false;
-    return /anthropic/i.test(res.stdout ?? '');
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Probe the host for a working OneCLI install so we can offer to reuse it
- * instead of re-running the installer (which rebinds the listener and breaks
- * any other app already using that gateway).
- */
-function detectExistingOnecli(): { version: string; apiHost: string } | null {
-  try {
-    const ver = spawnSync('onecli', ['version'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    if (ver.status !== 0) return null;
-    const version = (ver.stdout ?? '').trim();
-    if (!version) return null;
-
-    const host = spawnSync('onecli', ['config', 'get', 'api-host'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    if (host.status !== 0) return null;
-    const raw = (host.stdout ?? '').trim();
-    if (!raw) return null;
-
-    // onecli 1.3+ emits JSON by default. Older versions would print raw text.
-    try {
-      const parsed = JSON.parse(raw) as { data?: unknown; value?: unknown };
-      const val = parsed.data ?? parsed.value;
-      if (typeof val === 'string' && val.trim()) {
-        return { version, apiHost: val.trim() };
-      }
-    } catch {
-      // not JSON — try to extract a URL directly
-    }
-    const m = raw.match(/https?:\/\/[\w.\-]+(?::\d+)?/);
-    return m ? { version, apiHost: m[0] } : null;
-  } catch {
-    return null;
-  }
-}
-
 function runInheritScript(cmd: string, args: string[]): Promise<number> {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { stdio: 'inherit' });
@@ -892,7 +731,7 @@ function runInheritScript(cmd: string, args: string[]): Promise<number> {
 /**
  * After installing Docker, this process's supplementary groups are still
  * frozen from login — subsequent steps that talk to /var/run/docker.sock
- * (onecli install, service start, …) fail with EACCES even though the
+ * (container setup, service start, …) fail with EACCES even though the
  * daemon is up. Detect that and re-exec the whole driver under `sg docker`
  * so the rest of the run inherits the docker group without a re-login.
  */
@@ -920,9 +759,7 @@ function printIntro(): void {
   const wordmark = `${k.bold('Nano')}${brandBold('Claw')}`;
 
   if (isReexec) {
-    p.intro(
-      `${brandChip(' Welcome ')}  ${wordmark}  ${k.dim('· picking up where we left off')}`,
-    );
+    p.intro(`${brandChip(' Welcome ')}  ${wordmark}  ${k.dim('· picking up where we left off')}`);
     return;
   }
 

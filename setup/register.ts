@@ -153,7 +153,7 @@ export async function run(args: string[]): Promise<void> {
       platform_id: parsed.platformId,
       name: parsed.name,
       is_group: 1,
-      unknown_sender_policy: 'strict',
+      unknown_sender_policy: 'report',
       created_at: new Date().toISOString(),
     });
     messagingGroup = getMessagingGroupByPlatform(parsed.channel, parsed.platformId)!;
@@ -167,18 +167,16 @@ export async function run(args: string[]): Promise<void> {
   if (!existing) {
     newlyWired = true;
     const mgaId = generateId('mga');
-    const triggerRules = parsed.trigger
-      ? JSON.stringify({
-          pattern: parsed.trigger,
-          requiresTrigger: parsed.requiresTrigger,
-        })
-      : null;
+    const engageMode = 'pattern';
+    const engagePattern = parsed.trigger || '.';
     createMessagingGroupAgent({
       id: mgaId,
       messaging_group_id: messagingGroup.id,
       agent_group_id: agentGroup.id,
-      trigger_rules: triggerRules,
-      response_scope: 'all',
+      engage_mode: engageMode,
+      engage_pattern: engagePattern,
+      sender_scope: 'all',
+      ignored_message_policy: 'drop',
       session_mode: parsed.sessionMode,
       priority: 0,
       created_at: new Date().toISOString(),
@@ -192,7 +190,12 @@ export async function run(args: string[]): Promise<void> {
 
   // 4. Send onboarding message — only on first wiring, not re-registration
   if (newlyWired) {
-    const { session } = resolveSession(agentGroup.id, messagingGroup.id, null, parsed.sessionMode as 'shared' | 'per-thread' | 'agent-shared');
+    const { session } = resolveSession(
+      agentGroup.id,
+      messagingGroup.id,
+      null,
+      parsed.sessionMode as 'shared' | 'per-thread' | 'agent-shared',
+    );
     writeSessionMessage(agentGroup.id, session.id, {
       id: generateId('onboard'),
       kind: 'task',

@@ -17,8 +17,6 @@
 #
 # Config via env — passed through unchanged:
 #   NANOCLAW_SKIP  comma-separated setup:auto step names to skip
-#   SECRET_NAME    OneCLI secret name (default: Anthropic)
-#   HOST_PATTERN   OneCLI host pattern (default: api.anthropic.com)
 
 set -euo pipefail
 
