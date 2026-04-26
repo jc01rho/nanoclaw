@@ -1,23 +1,53 @@
 import fs from 'fs';
 import path from 'path';
 
-import { DATA_DIR, GROUPS_DIR } from './config.js';
+import { ANTHROPIC_MODEL, DATA_DIR, GROUPS_DIR } from './config.js';
 import { initContainerConfig } from './container-config.js';
 import { log } from './log.js';
 import type { AgentGroup } from './types.js';
 
-const DEFAULT_SETTINGS_JSON =
-  JSON.stringify(
-    {
+const DEFAULT_SETTINGS = {
+  model: ANTHROPIC_MODEL,
+  env: {
+    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+    CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+  },
+};
+
+const DEFAULT_SETTINGS_JSON = JSON.stringify(DEFAULT_SETTINGS, null, 2) + '\n';
+
+function syncSettingsFile(settingsFile: string): boolean {
+  if (!fs.existsSync(settingsFile)) {
+    fs.writeFileSync(settingsFile, DEFAULT_SETTINGS_JSON);
+    return true;
+  }
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(settingsFile, 'utf-8')) as Record<string, unknown> & {
+      env?: Record<string, unknown>;
+    };
+    const next = {
+      ...raw,
+      model: ANTHROPIC_MODEL,
       env: {
-        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-        CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-        CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+        ...DEFAULT_SETTINGS.env,
+        ...(raw.env ?? {}),
       },
-    },
-    null,
-    2,
-  ) + '\n';
+    };
+    const nextJson = JSON.stringify(next, null, 2) + '\n';
+    const currentJson = JSON.stringify(raw, null, 2) + '\n';
+    if (nextJson !== currentJson) {
+      fs.writeFileSync(settingsFile, nextJson);
+      return true;
+    }
+  } catch {
+    fs.writeFileSync(settingsFile, DEFAULT_SETTINGS_JSON);
+    return true;
+  }
+
+  return false;
+}
 
 /**
  * Initialize the on-disk filesystem state for an agent group. Idempotent —
@@ -68,8 +98,7 @@ export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: s
   }
 
   const settingsFile = path.join(claudeDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(settingsFile, DEFAULT_SETTINGS_JSON);
+  if (syncSettingsFile(settingsFile)) {
     initialized.push('settings.json');
   }
 
