@@ -8,7 +8,7 @@ export interface AgentGroup {
   created_at: string;
 }
 
-export type UnknownSenderPolicy = 'strict' | 'request_approval' | 'public';
+export type UnknownSenderPolicy = 'strict' | 'request_approval' | 'public' | 'report';
 
 export interface MessagingGroup {
   id: string;

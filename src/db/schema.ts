@@ -30,7 +30,7 @@ CREATE TABLE messaging_groups (
   name                  TEXT,
   is_group              INTEGER DEFAULT 0,
   unknown_sender_policy TEXT NOT NULL DEFAULT 'strict',
-                        -- 'strict' | 'request_approval' | 'public'
+                        -- 'strict' | 'request_approval' | 'public' | 'report'
   created_at            TEXT NOT NULL,
   UNIQUE(channel_type, platform_id)
 );
@@ -144,6 +144,23 @@ CREATE TABLE pending_sender_approvals (
   created_at         TEXT NOT NULL,
   UNIQUE(messaging_group_id, sender_identity)
 );
+
+-- Relayed unknown-sender problem reports. Used when
+-- messaging_groups.unknown_sender_policy='report'. Unlike sender approvals,
+-- these rows never grant membership; they are an audit/rate-limit surface for
+-- messages forwarded to the dedicated report-evaluator agent.
+CREATE TABLE pending_report_relays (
+  id                 TEXT PRIMARY KEY,
+  messaging_group_id TEXT NOT NULL REFERENCES messaging_groups(id),
+  agent_group_id     TEXT NOT NULL REFERENCES agent_groups(id),
+  sender_identity    TEXT NOT NULL,
+  sender_name        TEXT,
+  original_message   TEXT NOT NULL,
+  report_session_id  TEXT,
+  created_at         TEXT NOT NULL
+);
+CREATE INDEX idx_pending_report_relays_recent
+  ON pending_report_relays(messaging_group_id, sender_identity, created_at);
 `;
 
 /**

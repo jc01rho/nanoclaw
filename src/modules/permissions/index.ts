@@ -36,6 +36,7 @@ import { deletePendingChannelApproval, getPendingChannelApproval } from './db/pe
 import { deletePendingSenderApproval, getPendingSenderApproval } from './db/pending-sender-approvals.js';
 import { hasAdminPrivilege } from './db/user-roles.js';
 import { getUser, upsertUser } from './db/users.js';
+import { relayUnknownSenderReport } from './report-relay.js';
 import { requestSenderApproval } from './sender-approval.js';
 
 function extractAndUpsertUser(event: InboundEvent): string | null {
@@ -82,6 +83,24 @@ function safeParseContent(raw: string): { text?: string; sender?: string; sender
   } catch {
     return { text: raw };
   }
+}
+
+function isOperationalIncidentReport(event: InboundEvent): boolean {
+  const parsed = safeParseContent(event.message.content);
+  const text = typeof parsed.text === 'string' ? parsed.text.toLowerCase() : '';
+  if (!text) return false;
+
+  const mentionsInfra =
+    /\b(nexus|teamcity|gitlab|longhorn|argo|ingress|gateway|k8s|kubernetes|pod|service|infra|infrastructure|cluster)\b/i.test(
+      text,
+    ) || /(인프라|클러스터|쿠버|서비스)/i.test(text);
+
+  const reportsIncident =
+    /(죽|장애|이상|불만|문제|안\s*되|안되|접속.*안|느리|오류|고장|먹통|down|broken|weird|not\s+working|unreachable|timeout|failed|failure|degraded)/i.test(
+      text,
+    );
+
+  return mentionsInfra && reportsIncident;
 }
 
 function handleUnknownSender(
@@ -139,7 +158,27 @@ function handleUnknownSender(
     return;
   }
 
-  // 'public' should have been handled before the gate; fall through silently.
+  if (mg.unknown_sender_policy === 'report') {
+    log.info('MESSAGE RELAYED — unknown sender (report policy)', {
+      messagingGroupId: mg.id,
+      agentGroupId,
+      userId,
+      accessReason,
+    });
+    recordDroppedMessage(dropRecord);
+    if (userId) {
+      relayUnknownSenderReport({
+        messagingGroupId: mg.id,
+        agentGroupId,
+        senderIdentity: userId,
+        senderName,
+        event,
+      }).catch((err) => log.error('Report-relay flow threw', { err }));
+    }
+    return;
+  }
+
+  // 'public' is handled before the gate; unknown future policy values fall through silently.
 }
 
 setSenderResolver(extractAndUpsertUser);
@@ -147,6 +186,25 @@ setSenderResolver(extractAndUpsertUser);
 setAccessGate((event, userId, mg, agentGroupId): AccessGateResult => {
   // Public channels skip the access check entirely.
   if (mg.unknown_sender_policy === 'public') {
+    if (userId) {
+      const decision = canAccessAgentGroup(userId, agentGroupId);
+      if (!decision.allowed && isOperationalIncidentReport(event)) {
+        log.info('MESSAGE RELAYED — public non-admin incident report', {
+          messagingGroupId: mg.id,
+          agentGroupId,
+          userId,
+          accessReason: decision.reason,
+        });
+        const parsed = safeParseContent(event.message.content);
+        relayUnknownSenderReport({
+          messagingGroupId: mg.id,
+          agentGroupId,
+          senderIdentity: userId,
+          senderName: parsed.sender ?? null,
+          event,
+        }).catch((err) => log.error('Report-relay flow threw', { err }));
+      }
+    }
     return { allowed: true };
   }
 
@@ -186,7 +244,7 @@ setSenderScopeGate(
  * Response handler for the unknown-sender approval card.
  *
  * Claim rule: questionId matches a row in pending_sender_approvals. If no
- * such row, return false so the next handler (approvals module, OneCLI,
+ * such row, return false so the next handler (approvals module, interactive,
  * interactive) gets a shot.
  *
  * Approve: add the sender to agent_group_members + re-invoke routeInbound
