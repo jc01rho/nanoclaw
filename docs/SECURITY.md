@@ -64,18 +64,18 @@ Messages and task operations are verified against group identity:
 | View all tasks | ✓ | Own only |
 | Manage other groups | ✓ | ✗ |
 
-### 5. Credential Isolation (OneCLI Agent Vault)
+### 5. Credential Configuration
 
-Real API credentials **never enter containers**. NanoClaw uses [OneCLI's Agent Vault](https://github.com/onecli/onecli) to proxy outbound requests and inject credentials at the gateway level.
+Runtime API credentials are configured on the host via `.env` and passed to containers at spawn time for direct Anthropic-compatible API calls.
 
 **How it works:**
-1. Credentials are registered once with `onecli secrets create`, stored and managed by OneCLI
-2. When NanoClaw spawns a container, it calls `applyContainerConfig()` to route outbound HTTPS through the OneCLI gateway
-3. The gateway matches requests by host and path, injects the real credential, and forwards
-4. Agents cannot discover real credentials — not in environment, stdin, files, or `/proc`
+1. Credentials and endpoint/model values are stored in local `.env`
+2. When NanoClaw spawns a container, it passes the needed env vars into that container
+3. The Claude-compatible client calls the configured endpoint directly
+4. Agents can use only the credentials injected into their runtime environment
 
-**Per-agent policies:**
-Each NanoClaw group gets its own OneCLI agent identity. This allows different credential policies per group (e.g. your sales agent vs. support agent). OneCLI supports rate limits, and time-bound access and approval flows are on the roadmap.
+**Per-agent behavior:**
+Each NanoClaw group still has its own runtime and filesystem boundary. Credential scoping now depends on which env vars the host passes into the container at startup.
 
 **NOT Mounted:**
 - Channel auth sessions (`store/auth/`) — host only
@@ -110,7 +110,7 @@ Each NanoClaw group gets its own OneCLI agent identity. This allows different cr
 │  • IPC authorization                                              │
 │  • Mount validation (external allowlist)                          │
 │  • Container lifecycle                                            │
-│  • OneCLI Agent Vault (injects credentials, enforces policies)   │
+│  • Host-managed `.env` credentials and endpoint/model config      │
 └────────────────────────────────┬─────────────────────────────────┘
                                  │
                                  ▼ Explicit mounts only, no secrets
@@ -119,8 +119,8 @@ Each NanoClaw group gets its own OneCLI agent identity. This allows different cr
 │  • Agent execution                                                │
 │  • Bash commands (sandboxed)                                      │
 │  • File operations (limited to mounts)                            │
-│  • API calls routed through OneCLI Agent Vault                   │
-│  • No real credentials in environment or filesystem              │
+│  • API calls go directly to configured Anthropic-compatible endpoint │
+│  • Runtime credentials come from injected environment variables   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 

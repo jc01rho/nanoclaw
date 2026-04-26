@@ -17,7 +17,7 @@ Major version. NanoClaw v2 is a substantial architectural rewrite. Existing fork
 - [BREAKING] **Apple Container removed from default setup.** Still available as an opt-in via `/convert-to-apple-container`.
 - **Shared-source agent-runner.** Per-group `agent-runner-src/` overlays are gone; all groups mount the same agent-runner read-only. Per-group customization flows through composed `CLAUDE.md` (shared base + per-group fragments).
 - **Agent-runner runtime moved from Node to Bun.** Container image is self-contained; no host-side impact. Host remains on Node + pnpm.
-- **OneCLI Agent Vault is the sole credential path.** Containers never receive raw API keys; credentials are injected at request time.
+- **Direct `.env` credential path.** Host-side `.env` now provides direct endpoint, token, and model configuration for agent containers.
 
 ## [1.2.36] - 2026-03-26
 
@@ -25,7 +25,7 @@ Major version. NanoClaw v2 is a substantial architectural rewrite. Existing fork
 
 ## [1.2.35] - 2026-03-26
 
-- [BREAKING] OneCLI Agent Vault replaces the built-in credential proxy. Check your runtime: `grep CONTAINER_RUNTIME_BIN src/container-runtime.ts` — if it shows `'container'` you are on Apple Container, if `'docker'` you are on Docker. Docker users: run `/init-onecli` to install OneCLI and migrate `.env` credentials to the vault. Apple Container users: re-merge the skill branch (`git fetch upstream skill/apple-container && git merge upstream/skill/apple-container`) then run `/convert-to-apple-container` and follow all instructions (configures credential proxy networking) — do NOT run `/init-onecli`, it requires Docker.
+- [BREAKING] Legacy agent-vault setup is no longer the active credential path in trunk. Use `.env`-based direct endpoint configuration instead.
 
 ## [1.2.21] - 2026-03-22
 

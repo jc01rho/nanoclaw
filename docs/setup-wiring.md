@@ -16,10 +16,10 @@ Last updated: 2026-04-09
 - Container image rebuilt with tsconfig (`container/agent-runner/tsconfig.json`)
 - E2E verified: host → Docker container → Claude responds → "E2E works!" ✓
 
-### OneCLI Integration
-- `ensureAgent()` call added before `applyContainerConfig()` in `src/container-runner.ts`
-- Without `ensureAgent`, OneCLI rejects unknown agent identifiers and returns false, leaving container with no credentials
-- E2E verified with OneCLI credential injection ✓
+### Direct credential wiring
+- `src/container-runner.ts` passes `ANTHROPIC_BASE_URL`, auth token/key, and model env vars directly into containers
+- Containers call the configured Anthropic-compatible endpoint without a credential gateway
+- E2E should verify direct endpoint delivery and authentication
 
 ### Channel Barrel
 - `src/index.ts` imports `./channels/index.js` (the barrel)
@@ -95,7 +95,7 @@ Channel adapter → routeInbound() → resolve messaging_group → resolve agent
 | `src/session-manager.ts` | Creates inbound.db + outbound.db per session |
 | `src/delivery.ts` | Polls outbound.db, delivers, handles system actions |
 | `src/host-sweep.ts` | Syncs processing_ack, stale detection, recurrence |
-| `src/container-runner.ts` | Spawns containers, OneCLI ensureAgent + applyContainerConfig |
+| `src/container-runner.ts` | Spawns containers and passes direct endpoint/auth env vars |
 | `setup/register.ts` | Creates entities (agent_group, messaging_group, wiring) |
 | `setup/verify.ts` | Checks central DB for registered groups |
 | `container/agent-runner/src/db/connection.ts` | Two-DB connection layer (inbound read-only, outbound read-write) |

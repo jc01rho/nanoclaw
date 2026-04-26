@@ -31,7 +31,7 @@ cd nanoclaw-v2
 bash nanoclaw.sh
 ```
 
-`nanoclaw.sh`は、まっさらなマシンから、メッセージを送れる名前付きエージェントが動く状態までを一気通貫で案内します。NodeやpnpmやDockerが無ければインストールし、AnthropicクレデンシャルをOneCLIに登録し、エージェントコンテナをビルドし、最初のチャネル（Telegram、Discord、WhatsApp、またはローカルCLI）とペアリングします。途中でステップが失敗すれば自動的にClaude Codeが呼び出され、原因を診断して中断箇所から再開します。
+`nanoclaw.sh`は、まっさらなマシンから、メッセージを送れる名前付きエージェントが動く状態までを一気通貫で案内します。NodeやpnpmやDockerが無ければインストールし、Anthropic互換のクレデンシャルをローカルの`.env`へ書き込み、エージェントコンテナをビルドし、最初のチャネル（Telegram、Discord、WhatsApp、またはローカルCLI）とペアリングします。途中でステップが失敗すれば自動的にClaude Codeが呼び出され、原因を診断して中断箇所から再開します。
 
 ## 設計思想
 
@@ -57,7 +57,7 @@ bash nanoclaw.sh
 - **スケジュールタスク** — Claudeを実行し、結果を返信できる定期ジョブ。
 - **Webアクセス** — Webからの検索とコンテンツ取得。
 - **コンテナ分離** — エージェントはDockerでサンドボックス化されます（macOS/Linux/WSL2）。[Docker Sandboxes](docs/docker-sandboxes.md)によるマイクロVM分離や、macOSネイティブのオプトインとしてApple Containerも選択可能です。
-- **クレデンシャルのセキュリティ** — エージェントは生のAPIキーを保持しません。アウトバウンドリクエストは[OneCLI Agent Vault](https://github.com/onecli/onecli)を経由し、リクエスト時に認証情報を注入して、エージェントごとのポリシーとレート制限を適用します。
+- **クレデンシャル設定** — ランタイムの認証情報は`ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`などの`.env`変数でホスト側に設定し、コンテナ起動時に注入します。
 
 ## 使い方
 
@@ -129,7 +129,7 @@ NanoClawは設定ファイルを使いません。変更したいときは、Cla
 - `src/delivery.ts` — `outbound.db`をポーリングし、アダプター経由で配信、システムアクションを処理
 - `src/host-sweep.ts` — 60秒ごとのsweep：ストール検出、期限到来メッセージの起動、繰り返し
 - `src/session-manager.ts` — セッションの解決、`inbound.db`と`outbound.db`のオープン
-- `src/container-runner.ts` — エージェントグループごとのコンテナ起動、OneCLIによるクレデンシャル注入
+- `src/container-runner.ts` — エージェントグループごとのコンテナ起動と直接LLM用envの注入
 - `src/db/` — セントラルDB（ユーザー、ロール、エージェントグループ、メッセージンググループ、配線、マイグレーション）
 - `src/channels/` — チャネルアダプターのインフラ（アダプターは`/add-<channel>`スキルでインストール）
 - `src/providers/` — ホスト側プロバイダー設定（`claude`はバンドル、その他はスキル経由）
@@ -148,7 +148,7 @@ Dockerはクロスプラットフォーム対応（macOS、Linux、WSL2経由の
 
 **セキュリティは大丈夫ですか？**
 
-エージェントはアプリケーションレベルのパーミッションチェックではなく、コンテナ内で実行されます。明示的にマウントされたディレクトリのみアクセス可能です。クレデンシャルはコンテナに渡されず、アウトバウンドAPIリクエストは[OneCLI Agent Vault](https://github.com/onecli/onecli)を経由し、プロキシレベルで認証を注入し、レートリミットやアクセスポリシーをサポートします。実行するものはレビューすべきですが、コードベースは実際にレビュー可能な規模です。完全なセキュリティモデルについては[セキュリティドキュメント](https://docs.nanoclaw.dev/concepts/security)を参照してください。
+エージェントはアプリケーションレベルのパーミッションチェックではなく、コンテナ内で実行されます。明示的にマウントされたディレクトリのみアクセス可能です。認証情報はホスト側の`.env`で管理され、必要なものだけがコンテナ起動時に環境変数として渡されます。実行するものはレビューすべきですが、コードベースは実際にレビュー可能な規模です。完全なセキュリティモデルについては[セキュリティドキュメント](https://docs.nanoclaw.dev/concepts/security)を参照してください。
 
 **なぜ設定ファイルがないのか？**
 
