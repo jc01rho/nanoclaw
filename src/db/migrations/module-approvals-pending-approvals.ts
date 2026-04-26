@@ -5,10 +5,10 @@ import type { Migration } from './index.js';
  * request. Used by:
  *   - install_packages / add_mcp_server  (session-bound, `session_id` set,
  *     status stays at default 'pending' until handled)
- *   - OneCLI credential approvals from the SDK `configureManualApproval`
- *     callback (session_id may be null, action='onecli_credential').
+ *   - legacy credential approvals from a removed gateway integration
+ *     (session_id may be null, action='legacy_credential').
  *
- * The OneCLI-specific columns (`agent_group_id`, `channel_type`, `platform_id`,
+ * The legacy extra columns (`agent_group_id`, `channel_type`, `platform_id`,
  * `platform_message_id`, `expires_at`, `status`) let the host edit the admin
  * card when a request expires and sweep stale rows on startup.
  */

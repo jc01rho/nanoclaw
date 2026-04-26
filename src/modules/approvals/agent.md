@@ -40,6 +40,6 @@ You won't see the admin's response in your current turn. After approval, the con
 
 If denied, you'll get a chat message telling you the request was rejected. Do not retry automatically; explain to the user what was denied.
 
-## Credential approvals (OneCLI)
+## Credentials
 
-When you call an external API that requires credentials, OneCLI may prompt an admin for approval before releasing the token. This happens transparently: the HTTP call blocks until admin approves or denies. No action needed from you — just make the call. If it errors out with a credential failure, tell the user and stop.
+Credentials are provided through the host configuration and `.env`. If an external API call fails with an authentication error, tell the user which credential is missing or invalid and stop.
