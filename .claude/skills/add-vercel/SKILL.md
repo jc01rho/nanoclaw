@@ -1,11 +1,11 @@
 ---
 name: add-vercel
-description: Add Vercel deployment capability to NanoClaw agents. Installs the Vercel CLI in agent containers and sets up OneCLI credential injection for api.vercel.com. Use when the user wants agents to deploy web applications to Vercel.
+description: Add Vercel deployment capability to NanoClaw agents. Installs the Vercel CLI in agent containers and configures host-managed credentials for api.vercel.com. Use when the user wants agents to deploy web applications to Vercel.
 ---
 
 # Add Vercel
 
-This skill gives NanoClaw agents the ability to deploy web applications to Vercel. It installs the Vercel CLI in agent containers and configures OneCLI to inject Vercel credentials automatically.
+This skill gives NanoClaw agents the ability to deploy web applications to Vercel. It installs the Vercel CLI in agent containers and configures host-managed credentials for Vercel operations.
 
 **Principle:** Do the work — don't tell the user to do it. Only ask for their input when it genuinely requires manual action (pasting a token).
 
@@ -23,13 +23,13 @@ If `INSTALLED`, skip to Phase 3 (Configure Credentials).
 
 ### Check prerequisites
 
-Verify OneCLI is working (required for credential injection):
+Check that a Vercel token is available in host configuration:
 
 ```bash
-onecli version 2>/dev/null && echo "ONECLI_OK" || echo "ONECLI_MISSING"
+grep -E '^VERCEL_TOKEN=' .env 2>/dev/null && echo "VERCEL_TOKEN_OK" || echo "VERCEL_TOKEN_MISSING"
 ```
 
-If `ONECLI_MISSING`, tell the user to run `/init-onecli` first, then retry `/add-vercel`. Stop here.
+If `VERCEL_TOKEN_MISSING`, tell the user to add `VERCEL_TOKEN` to `.env`, then retry `/add-vercel`. Stop here.
 
 ## Phase 2: Install Container Skill
 
@@ -50,7 +50,7 @@ head -5 container/skills/vercel-cli/SKILL.md
 ### Check if Vercel credential already exists
 
 ```bash
-onecli secrets list 2>/dev/null | grep -i vercel
+grep -E '^VERCEL_TOKEN=' .env 2>/dev/null
 ```
 
 If a Vercel credential already exists, skip to Phase 4.
@@ -67,37 +67,23 @@ The agent needs a Vercel personal access token. Tell the user:
 >
 > After creating the token, copy it — you'll only see it once.
 
-Once the user provides the token, add it to OneCLI:
+Once the user provides the token, add it to `.env`:
 
 ```bash
-onecli secrets create \
-  --name "Vercel API Token" \
-  --type generic \
-  --value "<TOKEN>" \
-  --host-pattern "api.vercel.com" \
-  --header-name "Authorization" \
-  --value-format "Bearer {value}"
+grep -q '^VERCEL_TOKEN=' .env 2>/dev/null \
+  && perl -0pi -e 's/^VERCEL_TOKEN=.*/VERCEL_TOKEN=<TOKEN>/m' .env \
+  || printf '\nVERCEL_TOKEN=<TOKEN>\n' >> .env
 ```
 
 Verify:
 
 ```bash
-onecli secrets list | grep -i vercel
+grep -E '^VERCEL_TOKEN=' .env
 ```
 
-### Assign the secret to all agents
+### Make the token available to the runtime
 
-OneCLI uses selective secret mode — secrets must be explicitly assigned to each agent. Get the Vercel secret ID from the output above, then assign it to every agent:
-
-```bash
-# For each agent, add the Vercel secret to its assigned secrets list.
-# First get current assignments, then set them with the new secret appended.
-VERCEL_SECRET_ID=$(onecli secrets list 2>/dev/null | grep -B2 "Vercel" | grep '"id"' | head -1 | sed 's/.*"id": "//;s/".*//')
-for agent in $(onecli agents list 2>/dev/null | grep '"id"' | sed 's/.*"id": "//;s/".*//'); do
-  CURRENT=$(onecli agents secrets --id "$agent" 2>/dev/null | grep '"' | grep -v hint | grep -v data | sed 's/.*"//;s/".*//' | tr '\n' ',' | sed 's/,$//')
-  onecli agents set-secrets --id "$agent" --secret-ids "${CURRENT:+$CURRENT,}$VERCEL_SECRET_ID"
-done
-```
+NanoClaw now reads runtime credentials from host-managed configuration, so no extra per-agent secret assignment step is required.
 
 ## Phase 4: Ensure Vercel CLI in Container Image
 

@@ -1,11 +1,11 @@
 ---
 name: use-native-credential-proxy
-description: Replace OneCLI gateway with the built-in credential proxy. For users who want simple .env-based credential management without installing OneCLI. Reads API key or OAuth token from .env and injects into container API requests.
+description: Configure direct `.env`-based credential management for Anthropic-compatible API calls. Reads API key or OAuth token from `.env` and injects them into container API requests.
 ---
 
-# Use Native Credential Proxy
+# Use Direct Host Credentials
 
-This skill replaces the OneCLI gateway with NanoClaw's built-in credential proxy. Containers get credentials injected via a local HTTP proxy that reads from `.env` — no external services needed.
+This skill configures NanoClaw to use direct host-managed credentials from `.env`. Containers get the needed API settings as environment variables — no external credential gateway needed.
 
 ## Phase 1: Pre-flight
 
@@ -19,15 +19,13 @@ grep "credential-proxy" src/index.ts
 
 If it shows an import for `startCredentialProxy`, the native proxy is already active. Skip to Phase 3 (Setup).
 
-### Check if OneCLI is active
+### Check if direct env config is already active
 
 ```bash
-grep "@onecli-sh/sdk" package.json
+grep "ANTHROPIC_BASE_URL" .env
 ```
 
-If `@onecli-sh/sdk` appears, OneCLI is the active credential provider. Proceed with Phase 2 to replace it.
-
-If neither check matches, you may be on an older version. Run `/update-nanoclaw` first, then retry.
+If direct env config is already present, skip to Phase 3 (Setup).
 
 ## Phase 2: Apply Code Changes
 
@@ -57,7 +55,7 @@ git merge upstream/skill/native-credential-proxy || {
 This merges in:
 - `src/credential-proxy.ts` and `src/credential-proxy.test.ts` (the proxy implementation)
 - Restored credential proxy usage in `src/index.ts`, `src/container-runner.ts`, `src/container-runtime.ts`, `src/config.ts`
-- Removed `@onecli-sh/sdk` dependency
+- Removed the old gateway dependency
 - Restored `CREDENTIAL_PROXY_PORT` config (default 3001)
 - Restored platform-aware proxy bind address detection
 - Reverted setup skill to `.env`-based credential instructions
@@ -66,10 +64,10 @@ If the merge reports conflicts beyond `pnpm-lock.yaml`, resolve them by reading 
 
 ### Update main group CLAUDE.md
 
-Replace the OneCLI auth reference with the native proxy:
+Replace the old gateway auth reference with the direct `.env` path:
 
 In `groups/main/CLAUDE.md`, replace:
-> OneCLI manages credentials (including Anthropic auth) — run `onecli --help`.
+> Credentials are managed from `.env` — see the runtime config files.
 
 with:
 > The native credential proxy manages credentials (including Anthropic auth) via `.env` — see `src/credential-proxy.ts`.
@@ -143,7 +141,7 @@ Expected: `Credential proxy started` with port and auth mode.
 
 3. Send a test message in the registered chat to verify the agent responds.
 
-4. Note: after applying this skill, the OneCLI credential steps in `/setup` no longer apply. `.env` is now the credential source.
+4. Note: after applying this skill, `.env` is the credential source used by setup and runtime.
 
 ## Troubleshooting
 
@@ -157,11 +155,11 @@ Expected: `Credential proxy started` with port and auth mode.
 
 ## Removal
 
-To revert to OneCLI gateway:
+To revert to a different credential strategy:
 
 1. Find the merge commit: `git log --oneline --merges -5`
 2. Revert it: `git revert <merge-commit> -m 1` (undoes the skill branch merge, keeps your other changes)
-3. `pnpm install` (re-adds `@onecli-sh/sdk`)
+3. `pnpm install`
 4. `pnpm run build`
-5. Follow `/setup` step 4 to configure OneCLI credentials
+5. Reconfigure credentials for your chosen runtime path
 6. Remove `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` from `.env`

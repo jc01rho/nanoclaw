@@ -65,7 +65,7 @@ Add the `readEnvFile` import at the top if not already present:
 import { readEnvFile } from './env.js';
 ```
 
-Add after step 7 (OneCLI approval handler), before the `log.info('NanoClaw running')` line:
+Add before the `log.info('NanoClaw running')` line:
 
 ```typescript
   // 8. Dashboard (optional)

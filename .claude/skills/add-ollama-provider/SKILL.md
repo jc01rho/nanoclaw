@@ -46,7 +46,7 @@ blockedHosts: raw.blockedHosts,
 In `src/container-runner.ts`, after the `NANOCLAW_MCP_SERVERS` block, add:
 
 ```typescript
-// Per-agent-group env overrides — applied last to win over OneCLI values.
+// Per-agent-group env overrides — applied last to win over default host values.
 if (containerConfig.env) {
   for (const [key, value] of Object.entries(containerConfig.env)) {
     args.push('-e', `${key}=${value}`);
@@ -102,8 +102,7 @@ Omit `blockedHosts` if the user declined step 2.
 
 **Why these vars:** `ANTHROPIC_BASE_URL` redirects the Anthropic SDK to Ollama.
 `ANTHROPIC_API_KEY=ollama` satisfies the SDK's key requirement (Ollama ignores it).
-`NO_PROXY` bypasses the OneCLI HTTPS proxy for requests to `host.docker.internal`
-so they reach Ollama directly instead of going through the credential gateway.
+`NO_PROXY` ensures requests to `host.docker.internal` stay direct and do not get routed through any inherited proxy settings.
 
 ## 4. Set the model
 
