@@ -48,6 +48,8 @@ export interface ChatSdkBridgeConfig {
   concurrency?: ConcurrencyStrategy;
   /** Bot token for authenticating forwarded Gateway events (required for interaction handling). */
   botToken?: string;
+  /** Platform user IDs that should never be routed back into NanoClaw. */
+  ignoredAuthorIds?: string[];
   /** Platform-specific reply context extraction. */
   extractReplyContext?: ReplyContextExtractor;
   /**
@@ -72,6 +74,15 @@ export interface ChatSdkBridgeConfig {
    * and reactions still target the head of the reply.
    */
   maxTextLength?: number;
+}
+
+function isIgnoredAuthor(
+  ignoredAuthors: Set<string>,
+  author: { userId?: string; id?: string; bot?: boolean; isBot?: boolean } | null | undefined,
+): boolean {
+  if (!author) return false;
+  const authorId = author.userId ?? author.id;
+  return author.bot === true || author.isBot === true || (typeof authorId === 'string' && ignoredAuthors.has(authorId));
 }
 
 /**
@@ -100,12 +111,14 @@ export function splitForLimit(text: string, limit: number): string[] {
 export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter {
   const { adapter } = config;
   const transformText = (t: string): string => (config.transformOutboundText ? config.transformOutboundText(t) : t);
+  const ignoredAuthors = new Set(config.ignoredAuthorIds ?? []);
+
   let chat: Chat;
   let state: SqliteStateAdapter;
   let setupConfig: ChannelSetup;
   let gatewayAbort: AbortController | null = null;
 
-  async function messageToInbound(message: ChatMessage, isMention: boolean): Promise<InboundMessage> {
+  async function messageToInbound(message: ChatMessage, isMention: boolean): Promise<InboundMessage | null> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const serialized = message.toJSON() as Record<string, any>;
 
@@ -145,7 +158,17 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     // Project chat-sdk's nested author into the flat sender fields the router
     // expects (see src/router.ts extractAndUpsertUser). Native adapters already
     // populate these directly; this brings chat-sdk adapters in line.
-    const author = serialized.author as { userId?: string; fullName?: string; userName?: string } | undefined;
+    const author = serialized.author as
+      | { userId?: string; fullName?: string; userName?: string; bot?: boolean; isBot?: boolean }
+      | undefined;
+    if (isIgnoredAuthor(ignoredAuthors, author)) {
+      log.debug('Chat SDK inbound message skipped — ignored author', {
+        adapter: adapter.name,
+        messageId: message.id,
+        authorId: author?.userId,
+      });
+      return null;
+    }
     if (author) {
       const name = author.fullName ?? author.userName;
       serialized.senderId = author.userId;
@@ -195,13 +218,15 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // wirings still fire on in-thread mentions.
       chat.onSubscribedMessage(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, message.isMention === true));
+        const inbound = await messageToInbound(message, message.isMention === true);
+        if (inbound) await setupConfig.onInbound(channelId, thread.id, inbound);
       });
 
       // @mention in an unsubscribed thread — SDK-confirmed bot mention.
       chat.onNewMention(async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, true));
+        const inbound = await messageToInbound(message, true);
+        if (inbound) await setupConfig.onInbound(channelId, thread.id, inbound);
       });
 
       // DMs — by definition addressed to the bot. Thread id flows through
@@ -216,7 +241,8 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           sender: (message.author as any)?.fullName ?? (message.author as any)?.userId ?? 'unknown',
           threadId: thread.id,
         });
-        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, true));
+        const inbound = await messageToInbound(message, true);
+        if (inbound) await setupConfig.onInbound(channelId, thread.id, inbound);
       });
 
       // Plain messages in unsubscribed threads.
@@ -231,7 +257,8 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // flood gate.
       chat.onNewMessage(/./, async (thread, message) => {
         const channelId = adapter.channelIdFromThreadId(thread.id);
-        await setupConfig.onInbound(channelId, thread.id, await messageToInbound(message, false));
+        const inbound = await messageToInbound(message, false);
+        if (inbound) await setupConfig.onInbound(channelId, thread.id, inbound);
       });
 
       // Handle button clicks (ask_user_question)
@@ -551,6 +578,69 @@ async function handleForwardedEvent(
       }
       return;
     }
+  }
+
+  // Discord fallback: some forwarded MESSAGE_CREATE events reach the adapter
+  // but never surface through Chat SDK's onNewMention/onNewMessage callbacks.
+  // When that happens, route the raw Discord payload directly as a host
+  // inbound event so normal router/access/session logic still runs.
+  if (adapter.name === 'discord' && event.type === 'GATEWAY_MESSAGE_CREATE' && event.data) {
+    const data = event.data as Record<string, unknown>;
+    const channelId = typeof data.channel_id === 'string' ? data.channel_id : null;
+    const guildId = typeof data.guild_id === 'string' ? data.guild_id : '@me';
+    const messageId = typeof data.id === 'string' ? data.id : null;
+    const content = typeof data.content === 'string' ? data.content : '';
+    const timestamp = typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString();
+    const author =
+      typeof data.author === 'object' && data.author !== null ? (data.author as Record<string, unknown>) : null;
+    const authorId = typeof author?.id === 'string' ? author.id : null;
+    const discordAdapter = adapter as unknown as { botUserId?: string; applicationId?: string };
+    const ignoredAuthors = new Set<string>();
+    if (discordAdapter.botUserId) ignoredAuthors.add(discordAdapter.botUserId);
+    if (discordAdapter.applicationId) ignoredAuthors.add(discordAdapter.applicationId);
+    const isBot = isIgnoredAuthor(ignoredAuthors, author as { id?: string; bot?: boolean } | null);
+    const isSelfMessage =
+      authorId !== null && (authorId === discordAdapter.botUserId || authorId === discordAdapter.applicationId);
+    const authorName =
+      (typeof author?.global_name === 'string' ? author.global_name : undefined) ??
+      (typeof author?.username === 'string' ? author.username : undefined) ??
+      'Unknown';
+    const mentions = Array.isArray(data.mentions) ? (data.mentions as Array<Record<string, unknown>>) : [];
+    const mentionedApp = mentions.some(
+      (mention) => mention.id === discordAdapter.botUserId || mention.id === discordAdapter.applicationId,
+    );
+
+    if (channelId && messageId && authorId && !isBot && !isSelfMessage) {
+      log.info('Discord forwarded MESSAGE_CREATE fallback routing', {
+        platformId: `discord:${guildId}:${channelId}`,
+        authorId,
+        messageId,
+        mentionedApp,
+      });
+      const platformId = `discord:${guildId}:${channelId}`;
+      await setupConfig.onInbound(platformId, null, {
+        id: messageId,
+        kind: 'chat-sdk',
+        content: {
+          ...data,
+          text: content,
+          senderId: authorId,
+          sender: authorName,
+          senderName: authorName,
+        },
+        timestamp,
+        isMention: mentionedApp,
+      });
+      return;
+    }
+
+    log.warn('Discord forwarded MESSAGE_CREATE fallback skipped', {
+      channelId,
+      messageId,
+      authorId,
+      isBot,
+      isSelfMessage,
+    });
   }
 
   // Forward other events to the adapter's webhook handler for normal processing

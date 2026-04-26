@@ -1,8 +1,58 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { Adapter } from 'chat';
 
 import { createChatSdkBridge, splitForLimit } from './chat-sdk-bridge.js';
+
+vi.mock('chat', () => {
+  class MockChat {
+    static lastInstance: MockChat | null = null;
+    private handlers: Record<string, ((thread: { id: string }, message: any) => Promise<void>)[]> = {
+      subscribed: [],
+      mention: [],
+      dm: [],
+      plain: [],
+    };
+
+    constructor(_config: unknown) {
+      MockChat.lastInstance = this;
+    }
+
+    onSubscribedMessage(handler: (thread: { id: string }, message: any) => Promise<void>) {
+      this.handlers.subscribed.push(handler);
+    }
+
+    onNewMention(handler: (thread: { id: string }, message: any) => Promise<void>) {
+      this.handlers.mention.push(handler);
+    }
+
+    onDirectMessage(handler: (thread: { id: string }, message: any) => Promise<void>) {
+      this.handlers.dm.push(handler);
+    }
+
+    onNewMessage(_pattern: RegExp, handler: (thread: { id: string }, message: any) => Promise<void>) {
+      this.handlers.plain.push(handler);
+    }
+
+    onAction() {}
+    async initialize() {}
+    async shutdown() {}
+
+    async emitPlain(threadId: string, message: any) {
+      for (const handler of this.handlers.plain) {
+        await handler({ id: threadId }, message);
+      }
+    }
+  }
+
+  return {
+    Chat: MockChat,
+    Card: () => null,
+    CardText: () => null,
+    Actions: () => null,
+    Button: () => null,
+  };
+});
 
 function stubAdapter(partial: Partial<Adapter>): Adapter {
   return { name: 'stub', ...partial } as unknown as Adapter;
@@ -76,5 +126,49 @@ describe('createChatSdkBridge', () => {
       supportsThreads: true,
     });
     expect(typeof bridge.subscribe).toBe('function');
+  });
+
+  it('drops inbound messages from ignored authors to prevent response loops', async () => {
+    const adapter = stubAdapter({
+      channelIdFromThreadId: (threadId: string) => `discord:${threadId}`,
+      startTyping: async () => {},
+    });
+    const bridge = createChatSdkBridge({
+      adapter,
+      supportsThreads: true,
+      ignoredAuthorIds: ['bot-user-1'],
+    });
+
+    const onInbound = vi.fn();
+    await bridge.setup({
+      onInbound,
+      onInboundEvent: vi.fn(),
+      onMetadata: vi.fn(),
+      onAction: vi.fn(),
+    });
+
+    const message = {
+      id: 'msg-1',
+      isMention: false,
+      attachments: [],
+      raw: null,
+      metadata: { dateSent: new Date('2026-04-26T12:00:00.000Z') },
+      author: { userId: 'bot-user-1', fullName: 'InfraClaw', bot: true },
+      toJSON() {
+        return {
+          author: { userId: 'bot-user-1', fullName: 'InfraClaw', bot: true },
+          text: 'loop candidate',
+        };
+      },
+    };
+
+    const { Chat } = await import('chat');
+    const testChat = (
+      Chat as unknown as { lastInstance: { emitPlain: (threadId: string, message: unknown) => Promise<void> } | null }
+    ).lastInstance;
+    expect(testChat).toBeTruthy();
+    await testChat!.emitPlain('guild:chan', message);
+
+    expect(onInbound).not.toHaveBeenCalled();
   });
 });
