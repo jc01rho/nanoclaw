@@ -249,10 +249,13 @@ function escapeXml(str: string): string {
 }
 
 /**
- * Strip `<internal>...</internal>` blocks from agent output, then trim.
+ * Strip internal reasoning blocks from agent output, then trim.
  * Ported from v1 (src/v1/router.ts:25-27). Used to remove the agent's
  * own scratchpad/reasoning before a reply goes out over a channel.
  */
 export function stripInternalTags(text: string): string {
-  return text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+  return text
+    .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+    .replace(/<think>\s*[\s\S]*?<\/think>/gi, '')
+    .trim();
 }

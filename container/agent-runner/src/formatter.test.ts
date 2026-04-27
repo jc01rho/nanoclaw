@@ -24,12 +24,7 @@ afterEach(() => {
   closeSessionDb();
 });
 
-function insertMessage(
-  id: string,
-  kind: string,
-  content: object,
-  opts?: { timestamp?: string },
-) {
+function insertMessage(id: string, kind: string, content: object, opts?: { timestamp?: string }) {
   const timestamp = opts?.timestamp ?? new Date().toISOString();
   getInboundDb()
     .prepare(
@@ -142,9 +137,7 @@ describe('stripInternalTags', () => {
   });
 
   it('strips multi-line internal tags', () => {
-    expect(stripInternalTags('hello <internal>\nsecret\nstuff\n</internal> world')).toBe(
-      'hello  world',
-    );
+    expect(stripInternalTags('hello <internal>\nsecret\nstuff\n</internal> world')).toBe('hello  world');
   });
 
   it('strips multiple internal tag blocks', () => {
@@ -160,8 +153,14 @@ describe('stripInternalTags', () => {
   });
 
   it('preserves content that surrounds internal tags', () => {
-    expect(stripInternalTags('<internal>thinking</internal>The answer is 42')).toBe(
-      'The answer is 42',
-    );
+    expect(stripInternalTags('<internal>thinking</internal>The answer is 42')).toBe('The answer is 42');
+  });
+
+  it('strips think tags and trims', () => {
+    expect(stripInternalTags('<think>private reasoning</think>Public reply')).toBe('Public reply');
+  });
+
+  it('strips multiline think tags case-insensitively', () => {
+    expect(stripInternalTags('Before<THINK>\nprivate\nreasoning\n</THINK>After')).toBe('BeforeAfter');
   });
 });
