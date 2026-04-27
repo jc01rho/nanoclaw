@@ -6,7 +6,7 @@
  * Instead, it relays a bounded, untrusted report payload into a dedicated
  * report-evaluator agent whose default reply route is the originating channel.
  */
-import { getAgentGroupByFolder, createAgentGroup } from '../../db/agent-groups.js';
+import { getAgentGroup, getAgentGroupByFolder, createAgentGroup } from '../../db/agent-groups.js';
 import { log } from '../../log.js';
 import { initGroupFilesystem } from '../../group-init.js';
 import { resolveSession, writeSessionMessage } from '../../session-manager.js';
@@ -46,6 +46,9 @@ export async function relayUnknownSenderReport(input: ReportRelayInput): Promise
   }
 
   const reporterGroup = ensureReportEvaluatorGroup(now);
+  const originAgentGroup = getAgentGroup(input.agentGroupId);
+  const originAgentGroupFolder = originAgentGroup?.folder ?? null;
+  const originWorkspacePath = originAgentGroupFolder ? `/workspace/groups/${originAgentGroupFolder}` : null;
   const sessionMode = input.event.threadId ? 'per-thread' : 'shared';
   const { session } = resolveSession(
     reporterGroup.id,
@@ -77,6 +80,9 @@ export async function relayUnknownSenderReport(input: ReportRelayInput): Promise
       type: 'unknown_sender_report',
       senderIdentity: input.senderIdentity,
       senderName: input.senderName,
+      originAgentGroupId: input.agentGroupId,
+      originAgentGroupFolder,
+      originWorkspacePath,
       originChannelType: input.event.channelType,
       originPlatformId: input.event.platformId,
       originThreadId: input.event.threadId,
@@ -114,6 +120,10 @@ function ensureReportEvaluatorGroup(now: string): AgentGroup {
 }
 
 function buildReportPrompt(input: ReportRelayInput): string {
+  const originAgentGroup = getAgentGroup(input.agentGroupId);
+  const originAgentGroupFolder = originAgentGroup?.folder ?? null;
+  const originWorkspacePath = originAgentGroupFolder ? `/workspace/groups/${originAgentGroupFolder}` : null;
+
   return [
     '미등록 사용자의 문제 보고를 평가하세요.',
     '',
@@ -126,6 +136,9 @@ function buildReportPrompt(input: ReportRelayInput): string {
     '',
     `발신자: ${input.senderName ?? input.senderIdentity}`,
     `발신자 ID: ${input.senderIdentity}`,
+    `원 에이전트 그룹 ID: ${input.agentGroupId}`,
+    `원 에이전트 그룹 폴더: ${originAgentGroupFolder ?? '(unknown)'}`,
+    `원 에이전트 작업공간: ${originWorkspacePath ?? '(unknown)'}`,
     `원 채널: ${input.event.channelType}/${input.event.platformId}`,
     `스레드: ${input.event.threadId ?? '(none)'}`,
     '',
@@ -154,13 +167,17 @@ function reportEvaluatorInstructions(): string {
     '- Only read/evaluate the reported problem and suggest concrete next actions.',
     `- Post the final report back to the originating channel/thread and start the report by directly mentioning ${OWNER_DISCORD_MENTION}.`,
     '- Do not turn the reply into a back-and-forth with the original unregistered sender; post the analysis report for admin visibility.',
+    "- The task payload includes the originating agent-group folder and workspace path. Prefer that originating workspace for infrastructure inspection; do not assume the report-evaluator's own /workspace/agent contains the target IaC.",
     '- If a non-admin report describes a service outage, deployment failure, cluster problem, or similar operational incident, first interpret it as Kubernetes service and IaC context unless the evidence clearly points elsewhere.',
-    '- If the report names a concrete service such as Nexus, GitLab, TeamCity, Longhorn, Argo, ingress, or a similar infrastructure component, first search `/workspace/agent/k8s-iac/` and nearby workspace files for that service name before asking for URLs or basic identifiers.',
+    '- If the report names a concrete service such as Nexus, GitLab, TeamCity, Longhorn, Argo, ingress, or a similar infrastructure component, first search the originating workspace path from the task prompt (for example `/workspace/groups/<origin-folder>/k8s-iac/`) and nearby files there before asking for URLs or basic identifiers.',
     '- From the IaC search results, identify the likely namespace and relevant Kubernetes resources first (Deployment, StatefulSet, Service, Ingress, PVC, Gateway, Argo application, etc.), then summarize probable failure points and next actions.',
     '- If the same report names multiple services, extract and inspect all of them from IaC/Kubernetes before asking follow-up questions. Do not stop after the first service.',
-    '- Before asking for URLs, endpoints, or hostnames, first check whether those values already exist in `/workspace/agent/k8s-iac/`, `/workspace/agent/argo/`, `/workspace/agent/helm/`, or nearby workspace files.',
+    '- Before asking for URLs, endpoints, or hostnames, first check whether those values already exist in the originating workspace path (including k8s-iac/, argo/, helm/, and nearby files).',
     '- If the report says something is down, broken, weird, or not working, immediately verify that claim with available read-only evidence. Do not reply with additional diagnostic questions or a next-step questionnaire.',
+    '- If kube context and credentials are available, use kubectl and helm read-only checks for non-admin incident reports. Allowed: kubectl get/describe/logs/top/config get-contexts, helm list/status/history/get values, and helm template for local files. Forbidden for non-admin reports: kubectl apply/create/delete/patch/edit/scale/rollout undo/drain/cordon/uncordon/exec, and helm install/upgrade/uninstall/rollback/repo add/repo update/package.',
+    '- If live kubectl/helm context is unavailable, state only that the live read-only cluster check could not be performed, then continue with the originating workspace IaC analysis. Do not claim that manifests or charts do not exist until you have checked the originating workspace path from the task prompt.',
     '- After the initial diagnosis, immediately mention/call whrho in that same channel report and include: affected services, what was verified, likely failure points, current severity, and concrete recommended actions.',
+    `- Whenever the report explains required operational actions, mitigation steps, escalation considerations, or recommended next actions, include ${OWNER_DISCORD_MENTION} in that same message so the admin is visibly called in-channel.`,
     '',
     'Report format:',
     `${OWNER_DISCORD_MENTION} 문제 보고 드립니다.`,

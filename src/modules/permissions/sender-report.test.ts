@@ -130,11 +130,20 @@ describe('unknown-sender report relay flow', () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0].kind).toBe('task');
-    const payload = JSON.parse(messages[0].content) as { type: string; prompt: string; originPlatformId: string };
+    const payload = JSON.parse(messages[0].content) as {
+      type: string;
+      prompt: string;
+      originPlatformId: string;
+      originAgentGroupFolder: string;
+      originWorkspacePath: string;
+    };
     expect(payload.type).toBe('unknown_sender_report');
     expect(payload.originPlatformId).toBe('guild:channel');
+    expect(payload.originAgentGroupFolder).toBe('agent');
+    expect(payload.originWorkspacePath).toBe('/workspace/groups/agent');
     expect(payload.prompt).toContain('<@593604865771438083>');
     expect(payload.prompt).toContain('원 채널/스레드');
+    expect(payload.prompt).toContain('/workspace/groups/agent');
     expect(wakeContainer).toHaveBeenCalledTimes(1);
   });
 

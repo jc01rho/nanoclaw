@@ -214,6 +214,13 @@ function buildMounts(
   // Agent group folder at /workspace/agent (RW for working files + CLAUDE.local.md)
   mounts.push({ hostPath: groupDir, containerPath: '/workspace/agent', readonly: false });
 
+  // Report-evaluator sometimes needs to inspect the originating agent group's
+  // IaC workspace. Expose all group folders read-only at a separate path so it
+  // can read the source workspace without losing its own /workspace/agent.
+  if (agentGroup.folder === 'report-evaluator' && fs.existsSync(GROUPS_DIR)) {
+    mounts.push({ hostPath: GROUPS_DIR, containerPath: '/workspace/groups', readonly: true });
+  }
+
   // container.json — nested RO mount on top of RW group dir so the agent
   // can read its config but cannot modify it.
   const containerJsonPath = path.join(groupDir, 'container.json');
