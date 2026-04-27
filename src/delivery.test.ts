@@ -27,7 +27,7 @@ vi.mock('./config.js', async () => {
 const TEST_DIR = '/tmp/nanoclaw-test-delivery';
 
 import { initTestDb, closeDb, runMigrations, createAgentGroup, createMessagingGroup } from './db/index.js';
-import { resolveSession, outboundDbPath } from './session-manager.js';
+import { resolveSession, outboundDbPath, writeSessionMessage } from './session-manager.js';
 import { deliverSessionMessages, setDeliveryAdapter } from './delivery.js';
 
 function now(): string {
@@ -144,5 +144,106 @@ describe('deliverSessionMessages — concurrent invocations', () => {
     await deliverSessionMessages(session);
 
     expect(callCount).toBe(1);
+  });
+
+  it('injects whrho mention for public Discord incident replies when the agent omitted it', async () => {
+    createAgentGroup({
+      id: 'ag-1',
+      name: 'Test Agent',
+      folder: 'test-agent',
+      agent_provider: null,
+      created_at: now(),
+    });
+    createMessagingGroup({
+      id: 'mg-1',
+      channel_type: 'discord',
+      platform_id: 'discord:guild:channel',
+      name: 'Public Incident Channel',
+      is_group: 1,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+    const { session } = resolveSession('ag-1', 'mg-1', null, 'shared');
+
+    writeSessionMessage('ag-1', session.id, {
+      id: 'in-incident-1',
+      kind: 'chat',
+      timestamp: now(),
+      platformId: 'discord:guild:channel',
+      channelType: 'discord',
+      threadId: null,
+      content: JSON.stringify({
+        author: { userId: 'stranger-1', fullName: 'Stranger' },
+        text: '인프라 장애 불만이 있어요. 서비스가 계속 이상합니다.',
+      }),
+    });
+
+    const db = new Database(outboundDbPath('ag-1', session.id));
+    db.prepare(
+      `INSERT INTO messages_out (id, timestamp, kind, platform_id, channel_type, content)
+       VALUES (?, datetime('now'), 'chat', 'discord:guild:channel', 'discord', ?)`,
+    ).run('out-incident-1', JSON.stringify({ text: '조치가 필요합니다. VPN과 엔드포인트를 점검하세요.' }));
+    db.close();
+
+    const delivered: string[] = [];
+    setDeliveryAdapter({
+      async deliver(_channelType, _platformId, _threadId, _kind, content) {
+        delivered.push(content);
+        return 'plat-msg-id';
+      },
+    });
+
+    await deliverSessionMessages(session);
+
+    expect(delivered).toHaveLength(1);
+    expect(JSON.parse(delivered[0]).text).toContain('<@593604865771438083>');
+  });
+
+  it('strips think blocks before delivering chat text', async () => {
+    seedAgentAndChannel();
+    const { session } = resolveSession('ag-1', 'mg-1', null, 'shared');
+    const db = new Database(outboundDbPath('ag-1', session.id));
+    db.prepare(
+      `INSERT INTO messages_out (id, timestamp, kind, platform_id, channel_type, content)
+       VALUES (?, datetime('now'), 'chat', 'telegram:123', 'telegram', ?)`,
+    ).run('out-think', JSON.stringify({ text: '<think>secret reasoning</think>visible reply' }));
+    db.close();
+
+    const delivered: string[] = [];
+    setDeliveryAdapter({
+      async deliver(_channelType, _platformId, _threadId, _kind, content) {
+        delivered.push(content);
+        return 'plat-msg-id';
+      },
+    });
+
+    await deliverSessionMessages(session);
+
+    expect(delivered).toHaveLength(1);
+    expect(JSON.parse(delivered[0]).text).toBe('visible reply');
+  });
+
+  it('strips multiline think blocks from markdown before delivery', async () => {
+    seedAgentAndChannel();
+    const { session } = resolveSession('ag-1', 'mg-1', null, 'shared');
+    const db = new Database(outboundDbPath('ag-1', session.id));
+    db.prepare(
+      `INSERT INTO messages_out (id, timestamp, kind, platform_id, channel_type, content)
+       VALUES (?, datetime('now'), 'chat', 'telegram:123', 'telegram', ?)`,
+    ).run('out-think-markdown', JSON.stringify({ markdown: 'before\n<think>\nsecret\n</think>\nafter' }));
+    db.close();
+
+    const delivered: string[] = [];
+    setDeliveryAdapter({
+      async deliver(_channelType, _platformId, _threadId, _kind, content) {
+        delivered.push(content);
+        return 'plat-msg-id';
+      },
+    });
+
+    await deliverSessionMessages(session);
+
+    expect(delivered).toHaveLength(1);
+    expect(JSON.parse(delivered[0]).markdown).toBe('before\n\nafter');
   });
 });

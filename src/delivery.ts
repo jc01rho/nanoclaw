@@ -24,12 +24,14 @@ import { log } from './log.js';
 import { normalizeOptions } from './channels/ask-question.js';
 import { clearOutbox, openInboundDb, openOutboundDb, readOutboxFiles } from './session-manager.js';
 import { pauseTypingRefreshAfterDelivery, setTypingAdapter } from './modules/typing/index.js';
+import { canAccessAgentGroup } from './modules/permissions/access.js';
 import type { OutboundFile } from './channels/adapter.js';
 import type { Session } from './types.js';
 
 const ACTIVE_POLL_MS = 1000;
 const SWEEP_POLL_MS = 60_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
+const OWNER_DISCORD_MENTION = '<@593604865771438083>';
 
 /** Track delivery attempt counts. Resets on process restart (gives failed messages a fresh chance). */
 const deliveryAttempts = new Map<string, number>();
@@ -248,7 +250,7 @@ async function deliverMessage(
     return;
   }
 
-  const content = JSON.parse(msg.content);
+  const content = JSON.parse(msg.content) as Record<string, unknown>;
 
   // System actions — handle internally (schedule_task, cancel_task, etc.)
   if (msg.kind === 'system') {
@@ -314,15 +316,16 @@ async function deliverMessage(
   // exist and we skip persistence — the card still delivers to the user,
   // but the response path has nowhere to land and will log unclaimed.
   if (content.type === 'ask_question' && content.questionId && hasTable(getDb(), 'pending_questions')) {
+    const questionId = typeof content.questionId === 'string' ? content.questionId : null;
     const title = content.title as string | undefined;
     const rawOptions = content.options as unknown;
-    if (!title || !Array.isArray(rawOptions)) {
+    if (!questionId || !title || !Array.isArray(rawOptions)) {
       log.error('ask_question missing required title/options — not persisting', {
         questionId: content.questionId,
       });
     } else {
       createPendingQuestion({
-        question_id: content.questionId,
+        question_id: questionId,
         session_id: session.id,
         message_out_id: msg.id,
         platform_id: msg.platform_id,
@@ -350,12 +353,16 @@ async function deliverMessage(
       ? readOutboxFiles(session.agent_group_id, session.id, msg.id, content.files as string[])
       : undefined;
 
+  const sanitizedContent = sanitizeOutboundContent(content);
+  const deliveryContent =
+    maybeInjectOwnerMention(sanitizedContent, msg, session, inDb) ?? JSON.stringify(sanitizedContent);
+
   const platformMsgId = await deliveryAdapter.deliver(
     msg.channel_type,
     msg.platform_id,
     msg.thread_id,
     msg.kind,
-    msg.content,
+    deliveryContent,
     files,
   );
   log.info('Message delivered', {
@@ -369,6 +376,98 @@ async function deliverMessage(
   clearOutbox(session.agent_group_id, session.id, msg.id);
 
   return platformMsgId;
+}
+
+function maybeInjectOwnerMention(
+  content: Record<string, unknown>,
+  msg: { platform_id: string | null; channel_type: string | null },
+  session: Session,
+  inDb: Database.Database,
+): string | null {
+  if (msg.channel_type !== 'discord' || !msg.platform_id) return null;
+
+  const mg = getMessagingGroupByPlatform(msg.channel_type, msg.platform_id);
+  if (!mg || mg.unknown_sender_policy !== 'public') return null;
+
+  const text =
+    typeof content.text === 'string' ? content.text : typeof content.markdown === 'string' ? content.markdown : null;
+  if (!text || text.includes(OWNER_DISCORD_MENTION)) return null;
+  if (!hasRecentNonAdminIncident(inDb, msg.channel_type, msg.platform_id, session.agent_group_id)) return null;
+
+  const next = `${OWNER_DISCORD_MENTION}\n\n${text}`;
+  const updated = { ...content };
+  if (typeof updated.text === 'string') updated.text = next;
+  if (typeof updated.markdown === 'string') updated.markdown = next;
+  return JSON.stringify(updated);
+}
+
+function sanitizeOutboundContent(content: Record<string, unknown>): Record<string, unknown> {
+  const updated = { ...content };
+  if (typeof updated.text === 'string') updated.text = stripReasoningBlocks(updated.text);
+  if (typeof updated.markdown === 'string') updated.markdown = stripReasoningBlocks(updated.markdown);
+  return updated;
+}
+
+function stripReasoningBlocks(text: string): string {
+  return text.replace(/<think>\s*[\s\S]*?<\/think>/gi, '').trim();
+}
+
+function hasRecentNonAdminIncident(
+  inDb: Database.Database,
+  channelType: string,
+  platformId: string,
+  agentGroupId: string,
+): boolean {
+  const rows = inDb
+    .prepare(
+      `SELECT content FROM messages_in
+       WHERE channel_type = ? AND platform_id = ?
+       ORDER BY seq DESC
+       LIMIT 20`,
+    )
+    .all(channelType, platformId) as Array<{ content: string }>;
+
+  return rows.some((row) => {
+    const parsed = safeParseContent(row.content);
+    const text = typeof parsed.text === 'string' ? parsed.text : '';
+    if (!isOperationalIncidentText(text)) return false;
+
+    const senderIdentity = extractSenderIdentity(parsed, channelType);
+    if (!senderIdentity) return true;
+    return !canAccessAgentGroup(senderIdentity, agentGroupId).allowed;
+  });
+}
+
+function safeParseContent(raw: string): Record<string, unknown> {
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return { text: raw };
+  }
+}
+
+function extractSenderIdentity(content: Record<string, unknown>, channelType: string): string | null {
+  const author =
+    typeof content.author === 'object' && content.author !== null ? (content.author as Record<string, unknown>) : null;
+  const raw =
+    (typeof content.senderId === 'string' ? content.senderId : null) ??
+    (typeof content.sender === 'string' ? content.sender : null) ??
+    (typeof author?.userId === 'string' ? author.userId : null);
+  if (!raw) return null;
+  return raw.includes(':') ? raw : `${channelType}:${raw}`;
+}
+
+function isOperationalIncidentText(text: string): boolean {
+  if (!text) return false;
+  const mentionsInfra =
+    /\b(nexus|teamcity|gitlab|longhorn|argo|ingress|gateway|k8s|kubernetes|pod|service|infra|infrastructure|cluster)\b/i.test(
+      text,
+    ) || /(인프라|클러스터|쿠버|서비스)/i.test(text);
+  const reportsIncident =
+    /(죽|장애|이상|불만|문제|안\s*되|안되|접속.*안|느리|오류|고장|먹통|down|broken|weird|not\s+working|unreachable|timeout|failed|failure|degraded)/i.test(
+      text,
+    );
+  return mentionsInfra && reportsIncident;
 }
 
 /**
