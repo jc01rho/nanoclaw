@@ -13,6 +13,7 @@ const STEPS: Record<string, () => Promise<{ run: (args: string[]) => Promise<voi
   register: () => import('./register.js'),
   groups: () => import('./groups.js'),
   'whatsapp-auth': () => import('./whatsapp-auth.js'),
+  'signal-auth': () => import('./signal-auth.js'),
   mounts: () => import('./mounts.js'),
   service: () => import('./service.js'),
   verify: () => import('./verify.js'),
