@@ -21,14 +21,26 @@ function log(msg: string): void {
 const allTools: McpToolDefinition[] = [];
 const toolMap = new Map<string, McpToolDefinition>();
 
+export function getRegisteredToolNames(): string[] {
+  return allTools.map((t) => t.tool.name);
+}
+
 export function registerTools(tools: McpToolDefinition[]): void {
   for (const t of tools) {
-    if (toolMap.has(t.tool.name)) {
-      log(`Warning: tool "${t.tool.name}" already registered, skipping duplicate`);
+    const name = t.tool.name?.trim();
+    if (!name) {
+      log('Warning: attempted to register a tool with an empty name, skipping');
+      continue;
+    }
+    if (name !== t.tool.name) {
+      t.tool.name = name;
+    }
+    if (toolMap.has(name)) {
+      log(`Warning: tool "${name}" already registered, skipping duplicate`);
       continue;
     }
     allTools.push(t);
-    toolMap.set(t.tool.name, t);
+    toolMap.set(name, t);
   }
 }
 
