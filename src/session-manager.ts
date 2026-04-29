@@ -10,10 +10,11 @@
  *   3. One writer per file — DELETE-mode journal-unlink isn't atomic across
  *      the mount; concurrent writers corrupt the DB.
  */
-import type Database from 'better-sqlite3';
+import Database, { type Database as BetterSqliteDatabase } from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
+import { isSafeAttachmentName } from './attachment-safety.js';
 import type { OutboundFile } from './channels/adapter.js';
 import { DATA_DIR } from './config.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
@@ -252,11 +253,26 @@ function extractAttachmentFiles(
   let changed = false;
   for (const att of attachments) {
     if (typeof att.data === 'string') {
+      // The name field is attacker-controlled: chat platforms with E2E
+      // attachment encryption (WhatsApp, Matrix) cannot sanitize filename
+      // server-side, and other adapters pass att.name through raw. Without
+      // this guard, `path.join(inboxDir, '../../...')` writes anywhere the
+      // host process has fs permission — see Signal Desktop's Nov 2025
+      // attachment-fileName advisory for the same archetype.
+      const rawName = (att.name as string | undefined) ?? `attachment-${Date.now()}`;
+      const filename = isSafeAttachmentName(rawName) ? rawName : `attachment-${Date.now()}`;
+      if (filename !== rawName) {
+        log.warn('Refused unsafe attachment filename — would escape inbox', {
+          messageId,
+          rawName,
+          replacement: filename,
+        });
+      }
       const inboxDir = path.join(sessionDir(agentGroupId, sessionId), 'inbox', messageId);
       fs.mkdirSync(inboxDir, { recursive: true });
-      const filename = (att.name as string) || `attachment-${Date.now()}`;
       const filePath = path.join(inboxDir, filename);
       fs.writeFileSync(filePath, Buffer.from(att.data as string, 'base64'));
+      att.name = filename;
       att.localPath = `inbox/${messageId}/${filename}`;
       delete att.data;
       changed = true;
@@ -268,14 +284,14 @@ function extractAttachmentFiles(
 }
 
 /** Open the inbound DB for a session (host reads/writes). */
-export function openInboundDb(agentGroupId: string, sessionId: string): Database.Database {
+export function openInboundDb(agentGroupId: string, sessionId: string): BetterSqliteDatabase {
   const db = openInboundDbRaw(inboundDbPath(agentGroupId, sessionId));
   migrateMessagesInTable(db);
   return db;
 }
 
 /** Open the outbound DB for a session (host reads only). */
-export function openOutboundDb(agentGroupId: string, sessionId: string): Database.Database {
+export function openOutboundDb(agentGroupId: string, sessionId: string): BetterSqliteDatabase {
   return openOutboundDbRaw(outboundDbPath(agentGroupId, sessionId));
 }
 
@@ -296,7 +312,9 @@ export function writeOutboundDirect(
     content: string;
   },
 ): void {
-  const db = openOutboundDb(agentGroupId, sessionId);
+  const db = new Database(outboundDbPath(agentGroupId, sessionId));
+  db.pragma('journal_mode = DELETE');
+  db.pragma('busy_timeout = 5000');
   try {
     db.prepare(
       `INSERT OR IGNORE INTO messages_out (id, seq, timestamp, kind, platform_id, channel_type, thread_id, content)
@@ -310,7 +328,7 @@ export function writeOutboundDirect(
 /**
  * @deprecated Use openInboundDb / openOutboundDb instead.
  */
-export function openSessionDb(agentGroupId: string, sessionId: string): Database.Database {
+export function openSessionDb(agentGroupId: string, sessionId: string): BetterSqliteDatabase {
   return openInboundDb(agentGroupId, sessionId);
 }
 
