@@ -13,6 +13,15 @@ If you are a fresh install (you ran `git clone`, not `git pull`) and there are n
 
 ---
 
+# Devcenter skill usage
+devcenter 보고에 적절한 task 를 찾지 못했을경우, 적절한 스토리에 적절한 task를 생성해도 좋아.
+
+DevCenter 보고가 필요하면 STORY-692 적절한 task 기준으로 기록해줘. 새로 생성해도 좋아.
+
+devcenter 보고는 평일에만 할수있어. 평일이 아니거나 목요일 14시-24시 사이라면 작업 대기 예정으로 기록해놓고 다음의 아무 실행떄 평일이라면 그때 보고 하도록 지연시켜줘. 평일이 아니거나 목요일 14시-24시 사이라면 프로젝트 내에 별도의 markdown 파일로 보고 내용을 기록해놓고, 다음 실행때 평일이라면 그 파일을 읽어서 보고하도록 해줘. 보고가 필요한 작업이 여러개라면 모두 기록해놓고, 다음 실행때 평일이라면 모두 보고하도록 해줘. 그 기록을 .opencode/devcenter-pending 에 저장하고, .opencode/devcenter-pending에 처리되지 않은 보고건이 있다면 보고하고 보고를 올리고 삭제해줘
+
+
+
 # NanoClaw
 
 Personal Claude assistant. See [README.md](README.md) for philosophy and setup. Architecture lives in `docs/`.
