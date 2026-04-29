@@ -14,12 +14,16 @@ const envConfig = readEnvFile([
   'ANTHROPIC_AUTH_TOKEN',
   'CLAUDE_CODE_OAUTH_TOKEN',
   'ANTHROPIC_MODEL',
+  'OLLAMA_HOST',
+  'OLLAMA_ADMIN_TOOLS',
   'TZ',
 ]);
 
 export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
 export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER || envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
+export const OLLAMA_ADMIN_TOOLS = (process.env.OLLAMA_ADMIN_TOOLS || envConfig.OLLAMA_ADMIN_TOOLS) === 'true';
+export const OLLAMA_HOST = process.env.OLLAMA_HOST || envConfig.OLLAMA_HOST;
 
 // Absolute paths needed for container mounts
 const PROJECT_ROOT = process.cwd();

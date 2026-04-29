@@ -18,6 +18,8 @@ import {
   CONTAINER_INSTALL_LABEL,
   DATA_DIR,
   GROUPS_DIR,
+  OLLAMA_HOST,
+  OLLAMA_ADMIN_TOOLS,
   TIMEZONE,
 } from './config.js';
 import { readContainerConfig, writeContainerConfig } from './container-config.js';
@@ -426,6 +428,8 @@ async function buildContainerArgs(
   if (ANTHROPIC_AUTH_TOKEN) args.push('-e', `ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}`);
   if (CLAUDE_CODE_OAUTH_TOKEN) args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}`);
   if (ANTHROPIC_MODEL) args.push('-e', `ANTHROPIC_MODEL=${ANTHROPIC_MODEL}`);
+  if (OLLAMA_HOST) args.push('-e', `OLLAMA_HOST=${OLLAMA_HOST}`);
+  if (OLLAMA_ADMIN_TOOLS) args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
 
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
