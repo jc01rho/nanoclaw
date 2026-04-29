@@ -34,6 +34,8 @@ import { wakeContainer } from './container-runner.js';
 import { getSession } from './db/sessions.js';
 import type { AgentGroup, MessagingGroup, MessagingGroupAgent } from './types.js';
 import type { InboundEvent } from './channels/adapter.js';
+import { formatLocalTime } from './timezone.js';
+import { parseTextStyles, ChannelType } from './text-styles.js';
 
 function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -471,4 +473,37 @@ async function deliverToAgent(
 function messageIdForAgent(baseId: string | undefined, agentGroupId: string): string {
   const id = baseId && baseId.length > 0 ? baseId : generateId();
   return `${id}:${agentGroupId}`;
+}
+
+export function escapeXml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+export function formatMessages(
+  messages: Array<{ sender_name?: string | null; sender?: string | null; content: string; timestamp: string }>,
+  timezone: string,
+): string {
+  const body = messages
+    .map((message) => {
+      const sender = escapeXml(message.sender_name ?? message.sender ?? 'Unknown');
+      const content = escapeXml(message.content);
+      const time = escapeXml(formatLocalTime(message.timestamp, timezone));
+      return `<message sender="${sender}" time="${time}">${content}</message>`;
+    })
+    .join('\n');
+  return `<context timezone="${escapeXml(timezone)}" />\n<messages>\n${body}\n</messages>`;
+}
+
+export function stripInternalTags(text: string): string {
+  return text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+}
+
+export function stripReasoningBlocks(text: string): string {
+  return text.replace(/<think>\s*[\s\S]*?<\/think>/gi, '').trim();
+}
+
+export function formatOutbound(rawText: string, channel?: ChannelType): string {
+  const text = stripReasoningBlocks(stripInternalTags(rawText));
+  if (!text) return '';
+  return channel ? parseTextStyles(text, channel) : text;
 }

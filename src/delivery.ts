@@ -22,6 +22,7 @@ import {
 } from './db/session-db.js';
 import { log } from './log.js';
 import { normalizeOptions } from './channels/ask-question.js';
+import { formatOutbound } from './router.js';
 import { clearOutbox, openInboundDb, openOutboundDb, readOutboxFiles } from './session-manager.js';
 import { pauseTypingRefreshAfterDelivery, setTypingAdapter } from './modules/typing/index.js';
 import { canAccessAgentGroup } from './modules/permissions/access.js';
@@ -405,13 +406,9 @@ function maybeInjectOwnerMention(
 
 function sanitizeOutboundContent(content: Record<string, unknown>): Record<string, unknown> {
   const updated = { ...content };
-  if (typeof updated.text === 'string') updated.text = stripReasoningBlocks(updated.text);
-  if (typeof updated.markdown === 'string') updated.markdown = stripReasoningBlocks(updated.markdown);
+  if (typeof updated.text === 'string') updated.text = formatOutbound(updated.text);
+  if (typeof updated.markdown === 'string') updated.markdown = formatOutbound(updated.markdown);
   return updated;
-}
-
-function stripReasoningBlocks(text: string): string {
-  return text.replace(/<think>\s*[\s\S]*?<\/think>/gi, '').trim();
 }
 
 function hasRecentNonAdminIncident(
