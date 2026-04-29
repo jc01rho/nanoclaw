@@ -5,7 +5,14 @@ import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '
 
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
 import { registerProvider } from './provider-registry.js';
-import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
+import type {
+  AgentProvider,
+  AgentQuery,
+  McpServerConfig,
+  ProviderEvent,
+  ProviderOptions,
+  QueryInput,
+} from './types.js';
 
 function log(msg: string): void {
   console.error(`[claude-provider] ${msg}`);
@@ -115,10 +122,15 @@ function parseTranscript(content: string): ParsedMessage[] {
     try {
       const entry = JSON.parse(line);
       if (entry.type === 'user' && entry.message?.content) {
-        const text = typeof entry.message.content === 'string' ? entry.message.content : entry.message.content.map((c: { text?: string }) => c.text || '').join('');
+        const text =
+          typeof entry.message.content === 'string'
+            ? entry.message.content
+            : entry.message.content.map((c: { text?: string }) => c.text || '').join('');
         if (text) messages.push({ role: 'user', content: text });
       } else if (entry.type === 'assistant' && entry.message?.content) {
-        const textParts = entry.message.content.filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text);
+        const textParts = entry.message.content
+          .filter((c: { type: string }) => c.type === 'text')
+          .map((c: { text: string }) => c.text);
         const text = textParts.join('');
         if (text) messages.push({ role: 'assistant', content: text });
       }
@@ -131,7 +143,13 @@ function parseTranscript(content: string): ParsedMessage[] {
 
 function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | null, assistantName?: string): string {
   const now = new Date();
-  const dateStr = now.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+  const dateStr = now.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
   const lines = [`# ${title || 'Conversation'}`, '', `Archived: ${dateStr}`, '', '---', ''];
   for (const msg of messages) {
     const sender = msg.role === 'user' ? 'User' : assistantName || 'Assistant';
@@ -147,9 +165,16 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
  * script. Defense-in-depth: if SDK_DISALLOWED_TOOLS slips through somehow,
  * block the call here instead of letting the agent hang.
  */
-const preToolUseHook: HookCallback = async (input) => {
+export const preToolUseHook: HookCallback = async (input) => {
   const i = input as { tool_name?: string; tool_input?: Record<string, unknown> };
-  const toolName = i.tool_name ?? '';
+  const toolName = i.tool_name?.trim();
+  if (!toolName) {
+    log('PreToolUse: blocking empty tool_name to prevent transcript corruption');
+    return {
+      decision: 'block',
+      stopReason: 'Tool name is empty or undefined — blocking to prevent API transcript corruption.',
+    } as unknown as ReturnType<HookCallback>;
+  }
   if (SDK_DISALLOWED_TOOLS.includes(toolName)) {
     return {
       decision: 'block',
@@ -178,6 +203,19 @@ const postToolUseHook: HookCallback = async () => {
   return { continue: true };
 };
 
+export function createArchiveSlug(summary?: string): string {
+  const rawSlug = summary
+    ? summary
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 50)
+    : '';
+  if (rawSlug) return rawSlug;
+  const now = new Date();
+  return `conversation-${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}`;
+}
+
 function createPreCompactHook(assistantName?: string): HookCallback {
   return async (input) => {
     const preCompact = input as PreCompactHookInput;
@@ -199,20 +237,23 @@ function createPreCompactHook(assistantName?: string): HookCallback {
       if (fs.existsSync(indexPath)) {
         try {
           const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
-          summary = index.entries?.find((e: { sessionId: string; summary?: string }) => e.sessionId === sessionId)?.summary;
+          summary = index.entries?.find(
+            (e: { sessionId: string; summary?: string }) => e.sessionId === sessionId,
+          )?.summary;
         } catch {
           /* ignore */
         }
       }
 
-      const name = summary
-        ? summary.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50)
-        : `conversation-${new Date().getHours().toString().padStart(2, '0')}${new Date().getMinutes().toString().padStart(2, '0')}`;
+      const name = createArchiveSlug(summary);
 
       const conversationsDir = '/workspace/agent/conversations';
       fs.mkdirSync(conversationsDir, { recursive: true });
       const filename = `${new Date().toISOString().split('T')[0]}-${name}.md`;
-      fs.writeFileSync(path.join(conversationsDir, filename), formatTranscriptMarkdown(messages, summary, assistantName));
+      fs.writeFileSync(
+        path.join(conversationsDir, filename),
+        formatTranscriptMarkdown(messages, summary, assistantName),
+      );
       log(`Archived conversation to ${filename}`);
     } catch (err) {
       log(`Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`);
@@ -235,6 +276,85 @@ const CLAUDE_CODE_AUTO_COMPACT_WINDOW = '165000';
  * session ID, etc.
  */
 const STALE_SESSION_RE = /no conversation found|ENOENT.*\.jsonl|session.*not found/i;
+const EMPTY_TOOL_NAME_RE =
+  /Invalid 'input\[\d+\]\.name': empty string|"code"\s*:\s*"empty_string"|empty string\. Expected a string with minimum length 1/i;
+const DEFAULT_CLAUDE_HOME = '/home/node/.claude';
+
+interface JsonContentBlock {
+  type?: unknown;
+  name?: unknown;
+}
+
+interface JsonTranscriptEntry {
+  message?: {
+    content?: unknown;
+  };
+}
+
+function hasEmptyToolUseName(entry: JsonTranscriptEntry): boolean {
+  const content = entry.message?.content;
+  if (!Array.isArray(content)) return false;
+  return content.some(
+    (block: JsonContentBlock) =>
+      block.type === 'tool_use' && typeof block.name === 'string' && block.name.trim() === '',
+  );
+}
+
+export function transcriptHasEmptyToolUseName(content: string): boolean {
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      if (hasEmptyToolUseName(JSON.parse(trimmed) as JsonTranscriptEntry)) return true;
+    } catch {
+      /* skip unparseable transcript lines */
+    }
+  }
+  return false;
+}
+
+function walkJsonlFiles(dir: string, files: string[] = []): string[] {
+  if (!fs.existsSync(dir)) return files;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walkJsonlFiles(fullPath, files);
+    } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+export function quarantineEmptyToolNameTranscripts(claudeHome = DEFAULT_CLAUDE_HOME): string[] {
+  const projectsDir = path.join(claudeHome, 'projects');
+  const quarantined: string[] = [];
+  for (const transcriptPath of walkJsonlFiles(projectsDir)) {
+    let content: string;
+    try {
+      content = fs.readFileSync(transcriptPath, 'utf-8');
+    } catch (err) {
+      log(
+        `Failed to read transcript for empty-name scan (${transcriptPath}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      continue;
+    }
+
+    if (!transcriptHasEmptyToolUseName(content)) continue;
+
+    const quarantinePath = `${transcriptPath}.corrupt-empty-tool-name.${Date.now()}`;
+    try {
+      fs.renameSync(transcriptPath, quarantinePath);
+      quarantined.push(quarantinePath);
+      log(`Quarantined corrupt Claude transcript: ${quarantinePath}`);
+    } catch (err) {
+      log(
+        `Failed to quarantine corrupt transcript (${transcriptPath}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  return quarantined;
+}
 
 export class ClaudeProvider implements AgentProvider {
   readonly supportsNativeSlashCommands = true;
@@ -256,6 +376,11 @@ export class ClaudeProvider implements AgentProvider {
 
   isSessionInvalid(err: unknown): boolean {
     const msg = err instanceof Error ? err.message : String(err);
+    if (EMPTY_TOOL_NAME_RE.test(msg)) {
+      const quarantined = quarantineEmptyToolNameTranscripts();
+      log(`Detected empty tool-name transcript corruption; quarantined ${quarantined.length} transcript(s)`);
+      return true;
+    }
     return STALE_SESSION_RE.test(msg);
   }
 
@@ -272,7 +397,9 @@ export class ClaudeProvider implements AgentProvider {
         additionalDirectories: this.additionalDirectories,
         resume: input.continuation,
         pathToClaudeCodeExecutable: '/pnpm/claude',
-        systemPrompt: instructions ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions } : undefined,
+        systemPrompt: instructions
+          ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions }
+          : undefined,
         allowedTools: TOOL_ALLOWLIST,
         disallowedTools: SDK_DISALLOWED_TOOLS,
         env: this.env,
@@ -303,7 +430,7 @@ export class ClaudeProvider implements AgentProvider {
         if (message.type === 'system' && message.subtype === 'init') {
           yield { type: 'init', continuation: message.session_id };
         } else if (message.type === 'result') {
-          const text = 'result' in message ? (message as { result?: string }).result ?? null : null;
+          const text = 'result' in message ? ((message as { result?: string }).result ?? null) : null;
           yield { type: 'result', text };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'api_retry') {
           yield { type: 'error', message: 'API retry', retryable: true };
