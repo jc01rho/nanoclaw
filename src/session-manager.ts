@@ -290,7 +290,7 @@ export function openInboundDb(agentGroupId: string, sessionId: string): BetterSq
   return db;
 }
 
-/** Open the outbound DB for a session (host reads only). */
+/** Open the outbound DB for delivery polling/status writes. */
 export function openOutboundDb(agentGroupId: string, sessionId: string): BetterSqliteDatabase {
   return openOutboundDbRaw(outboundDbPath(agentGroupId, sessionId));
 }

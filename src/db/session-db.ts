@@ -25,9 +25,17 @@ export function openInboundDb(dbPath: string): Database.Database {
   return db;
 }
 
-/** Open the outbound DB for a session (host reads only). */
+/**
+ * Open the outbound DB for a session.
+ *
+ * The container is the only writer to messages_out, but the host delivery
+ * loop records delivery state in the same outbound.db (`delivered` table).
+ * Keep this connection writable so delivery can mark messages without
+ * tripping SQLite's read-only guard.
+ */
 export function openOutboundDb(dbPath: string): Database.Database {
-  const db = new Database(dbPath, { readonly: true });
+  const db = new Database(dbPath);
+  db.pragma('journal_mode = DELETE');
   db.pragma('busy_timeout = 5000');
   return db;
 }
@@ -208,7 +216,7 @@ export function getContainerState(outDb: Database.Database): ContainerState | nu
 }
 
 // ---------------------------------------------------------------------------
-// messages_out (read-only from host)
+// messages_out (container-owned rows; host writes delivery status only)
 // ---------------------------------------------------------------------------
 
 export interface OutboundMessage {
