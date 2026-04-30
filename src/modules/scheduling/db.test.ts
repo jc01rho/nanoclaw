@@ -146,13 +146,14 @@ describe('updateTask', () => {
       content: JSON.stringify({ prompt: 'old', script: 'echo old', extra: 'keep me' }),
     });
 
-    const touched = updateTask(db, 'task-1', { prompt: 'new' });
+    const touched = updateTask(db, 'task-1', { prompt: 'new', skipWeekends: true });
     expect(touched).toBe(1);
 
     const row = db.prepare('SELECT content FROM messages_in WHERE id = ?').get('task-1') as { content: string };
     const parsed = JSON.parse(row.content);
     expect(parsed.prompt).toBe('new');
     expect(parsed.script).toBe('echo old');
+    expect(parsed.skipWeekends).toBe(true);
     expect(parsed.extra).toBe('keep me');
   });
 

@@ -35,21 +35,24 @@ function err(text: string) {
 export const scheduleTask: McpToolDefinition = {
   tool: {
     name: 'schedule_task',
-    description:
-      `Schedule a one-shot or recurring task. The user's timezone is declared in the <context timezone="..."/> header of your prompt — interpret the user's "9pm" etc. in that zone. Cron expressions are interpreted in the user's timezone too.`,
+    description: `Schedule a one-shot or recurring task. The user's timezone is declared in the <context timezone="..."/> header of your prompt — interpret the user's "9pm" etc. in that zone. Cron expressions are interpreted in the user's timezone too.`,
     inputSchema: {
       type: 'object' as const,
       properties: {
         prompt: { type: 'string', description: 'Task instructions/prompt' },
         processAfter: {
           type: 'string',
-          description:
-            `ISO 8601 timestamp for the first run. Accepts either UTC (ending in "Z" or "+00:00") or a naive local timestamp (no offset) which is interpreted in the user's timezone (e.g. "2026-01-15T21:00:00" = 9pm user-local). Prefer naive local.`,
+          description: `ISO 8601 timestamp for the first run. Accepts either UTC (ending in "Z" or "+00:00") or a naive local timestamp (no offset) which is interpreted in the user's timezone (e.g. "2026-01-15T21:00:00" = 9pm user-local). Prefer naive local.`,
         },
         recurrence: {
           type: 'string',
           description:
             'Cron expression for recurring tasks (e.g., "0 9 * * 1-5" = weekdays at 9am user-local). Evaluated in the user\'s timezone.',
+        },
+        skipWeekends: {
+          type: 'boolean',
+          description:
+            'When true, recurring tasks will never be scheduled for Saturday or Sunday in the user timezone. Useful for weekday-only operational reports.',
         },
         script: { type: 'string', description: 'Optional pre-agent script to run before processing' },
       },
@@ -73,6 +76,7 @@ export const scheduleTask: McpToolDefinition = {
     const id = generateId();
     const r = routing();
     const recurrence = (args.recurrence as string) || null;
+    const skipWeekends = args.skipWeekends === true;
     const script = (args.script as string) || null;
 
     // Write as a system action — host will insert into inbound.db
@@ -87,6 +91,7 @@ export const scheduleTask: McpToolDefinition = {
         taskId: id,
         prompt,
         script,
+        skipWeekends,
         processAfter,
         recurrence,
       }),
@@ -145,9 +150,17 @@ export const listTasks: McpToolDefinition = {
 
     if ((rows as unknown[]).length === 0) return ok('No tasks found.');
 
-    const lines = (rows as Array<{ id: string; status: string; process_after: string | null; recurrence: string | null; content: string }>).map((r) => {
+    const lines = (
+      rows as Array<{
+        id: string;
+        status: string;
+        process_after: string | null;
+        recurrence: string | null;
+        content: string;
+      }>
+    ).map((r) => {
       const content = JSON.parse(r.content);
-      const prompt = (content.prompt as string || '').slice(0, 80);
+      const prompt = ((content.prompt as string) || '').slice(0, 80);
       return `- ${r.id} [${r.status}] at=${r.process_after || 'now'} ${r.recurrence ? `recur=${r.recurrence} ` : ''}→ ${prompt}`;
     });
 
@@ -251,10 +264,14 @@ export const updateTask: McpToolDefinition = {
           type: 'string',
           description: 'New cron expression (optional). Pass empty string to clear and make the task one-shot.',
         },
+        skipWeekends: {
+          type: 'boolean',
+          description:
+            'Update weekday-only recurrence behavior. true skips Saturday/Sunday; false allows weekend runs.',
+        },
         processAfter: {
           type: 'string',
-          description:
-            `New ISO 8601 timestamp for the next run (optional). Accepts either UTC (ending in "Z" / "+00:00") or a naive local timestamp interpreted in the user's timezone.`,
+          description: `New ISO 8601 timestamp for the next run (optional). Accepts either UTC (ending in "Z" / "+00:00") or a naive local timestamp interpreted in the user's timezone.`,
         },
         script: {
           type: 'string',
@@ -281,6 +298,7 @@ export const updateTask: McpToolDefinition = {
     }
     // Empty string clears recurrence/script; undefined leaves them as-is.
     if (typeof args.recurrence === 'string') update.recurrence = args.recurrence === '' ? null : args.recurrence;
+    if (typeof args.skipWeekends === 'boolean') update.skipWeekends = args.skipWeekends;
     if (typeof args.script === 'string') update.script = args.script === '' ? null : args.script;
 
     if (Object.keys(update).length === 1) return err('at least one field to update is required');

@@ -10,6 +10,7 @@
 import type Database from 'better-sqlite3';
 
 import { wakeContainer } from '../../container-runner.js';
+import { TIMEZONE } from '../../config.js';
 import { getSession } from '../../db/sessions.js';
 import { log } from '../../log.js';
 import { writeSessionMessage } from '../../session-manager.js';
@@ -26,17 +27,19 @@ export async function handleScheduleTask(
   const script = content.script as string | null;
   const processAfter = content.processAfter as string;
   const recurrence = (content.recurrence as string) || null;
+  const skipWeekends = content.skipWeekends === true;
+  const adjustedProcessAfter = skipWeekends ? moveWeekendToNextWeekday(processAfter) : processAfter;
 
   insertTask(inDb, {
     id: taskId,
-    processAfter,
+    processAfter: adjustedProcessAfter,
     recurrence,
     platformId: (content.platformId as string) ?? null,
     channelType: (content.channelType as string) ?? null,
     threadId: (content.threadId as string) ?? null,
-    content: JSON.stringify({ prompt, script }),
+    content: JSON.stringify({ prompt, script, skipWeekends }),
   });
-  log.info('Scheduled task created', { taskId, processAfter, recurrence });
+  log.info('Scheduled task created', { taskId, processAfter: adjustedProcessAfter, recurrence, skipWeekends });
 }
 
 export async function handleCancelTask(
@@ -77,13 +80,17 @@ export async function handleUpdateTask(
   const taskId = content.taskId as string;
   const update: TaskUpdate = {};
   if (typeof content.prompt === 'string') update.prompt = content.prompt;
-  if (typeof content.processAfter === 'string') update.processAfter = content.processAfter;
+  if (typeof content.processAfter === 'string') {
+    update.processAfter =
+      content.skipWeekends === true ? moveWeekendToNextWeekday(content.processAfter) : content.processAfter;
+  }
   if (content.recurrence === null || typeof content.recurrence === 'string') {
     update.recurrence = content.recurrence as string | null;
   }
   if (content.script === null || typeof content.script === 'string') {
     update.script = content.script as string | null;
   }
+  if (typeof content.skipWeekends === 'boolean') update.skipWeekends = content.skipWeekends;
   const touched = updateTask(inDb, taskId, update);
   log.info('Task updated', { taskId, touched, fields: Object.keys(update) });
   if (touched === 0) {
@@ -110,4 +117,20 @@ export async function handleUpdateTask(
       );
     }
   }
+}
+
+function moveWeekendToNextWeekday(processAfter: string): string {
+  const date = new Date(processAfter);
+  if (Number.isNaN(date.getTime()) || !isWeekendInConfiguredTimezone(date)) return processAfter;
+
+  const next = new Date(date);
+  while (isWeekendInConfiguredTimezone(next)) {
+    next.setUTCDate(next.getUTCDate() + 1);
+  }
+  return next.toISOString();
+}
+
+function isWeekendInConfiguredTimezone(date: Date): boolean {
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: TIMEZONE, weekday: 'short' }).format(date);
+  return weekday === 'Sat' || weekday === 'Sun';
 }

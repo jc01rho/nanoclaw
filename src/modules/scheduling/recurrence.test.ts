@@ -8,7 +8,7 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ensureSchema, openInboundDb } from '../../db/session-db.js';
 import { insertTask } from './db.js';
@@ -39,6 +39,7 @@ function fakeSession(): Session {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
 });
 
@@ -94,5 +95,29 @@ describe('handleRecurrence', () => {
 
     const count = (db.prepare(`SELECT COUNT(*) AS c FROM messages_in`).get() as { c: number }).c;
     expect(count).toBe(1);
+  });
+
+  it('skips weekend occurrences when task content opts in', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-01T09:05:00.000+09:00'));
+
+    const db = freshDb();
+    insertTask(db, {
+      id: 'task-1',
+      processAfter: '2026-05-01T00:00:00.000Z',
+      recurrence: '0 9 * * *',
+      platformId: null,
+      channelType: null,
+      threadId: null,
+      content: JSON.stringify({ prompt: 'K8s monitoring report', skipWeekends: true }),
+    });
+    db.prepare(`UPDATE messages_in SET status='completed' WHERE id='task-1'`).run();
+
+    await handleRecurrence(db, fakeSession());
+
+    const follow = db.prepare(`SELECT process_after FROM messages_in WHERE id != 'task-1'`).get() as {
+      process_after: string;
+    };
+    expect(follow.process_after).toBe('2026-05-04T00:00:00.000Z');
   });
 });
