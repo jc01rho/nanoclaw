@@ -11,7 +11,7 @@ import {
   stripInternalTags,
   type RoutingContext,
 } from './formatter.js';
-import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types.js';
+import type { AgentProvider, AgentQuery, ProviderEvent, RuntimePolicy } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
 const ACTIVE_POLL_INTERVAL_MS = 500;
@@ -160,6 +160,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // Format messages: passthrough commands get raw text (only if the
     // provider natively handles slash commands), others get XML.
     const prompt = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
+    const turnRuntimePolicy = runtimePolicyForMessages(keep);
 
     log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
 
@@ -168,13 +169,14 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       continuation,
       cwd: config.cwd,
       systemContext: config.systemContext,
+      runtimePolicy: turnRuntimePolicy,
     });
 
     // Process the query while concurrently polling for new messages
     const skippedSet = new Set(skipped);
     const processingIds = ids.filter((id) => !commandIds.includes(id) && !skippedSet.has(id));
     try {
-      const result = await processQuery(query, routing, processingIds, config.providerName);
+      const result = await processQuery(query, routing, processingIds, config.providerName, turnRuntimePolicy);
       if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
       }
@@ -247,6 +249,20 @@ function formatMessagesWithCommands(messages: MessageInRow[], nativeSlashCommand
   return parts.join('\n\n');
 }
 
+function runtimePolicyForMessages(messages: MessageInRow[]): RuntimePolicy | undefined {
+  return messages.some(isPublicGuestMessage) ? 'public_guest_k8s' : undefined;
+}
+
+function isPublicGuestMessage(message: MessageInRow): boolean {
+  if (message.kind !== 'chat' && message.kind !== 'chat-sdk') return false;
+  try {
+    const content = JSON.parse(message.content) as { senderTrust?: unknown };
+    return content.senderTrust === 'public_guest';
+  } catch {
+    return false;
+  }
+}
+
 interface QueryResult {
   continuation?: string;
 }
@@ -256,6 +272,7 @@ async function processQuery(
   routing: RoutingContext,
   initialBatchIds: string[],
   providerName: string,
+  runtimePolicy: RuntimePolicy | undefined,
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
   let done = false;
@@ -279,6 +296,7 @@ async function processQuery(
     const newMessages = getPendingMessages().filter((m) => {
       if (m.kind === 'system') return false;
       if ((m.kind === 'chat' || m.kind === 'chat-sdk') && isClearCommand(m)) return false;
+      if (runtimePolicy !== 'public_guest_k8s' && isPublicGuestMessage(m)) return false;
       return true;
     });
     if (newMessages.length > 0) {

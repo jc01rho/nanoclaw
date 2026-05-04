@@ -50,6 +50,9 @@ export interface QueryInput {
   systemContext?: {
     instructions?: string;
   };
+
+  /** Optional per-turn tool/runtime policy override. */
+  runtimePolicy?: RuntimePolicy;
 }
 
 export interface McpServerConfig {

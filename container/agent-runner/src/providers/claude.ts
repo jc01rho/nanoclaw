@@ -471,7 +471,7 @@ export class ClaudeProvider implements AgentProvider {
         systemPrompt: instructions
           ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions }
           : undefined,
-        allowedTools: getToolAllowlist(this.runtimePolicy),
+        allowedTools: getToolAllowlist(input.runtimePolicy ?? this.runtimePolicy),
         disallowedTools: SDK_DISALLOWED_TOOLS,
         env: this.env,
         permissionMode: 'bypassPermissions',
