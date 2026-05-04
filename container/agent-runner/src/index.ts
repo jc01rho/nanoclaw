@@ -41,6 +41,7 @@ const CWD = '/workspace/agent';
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  process.env.NANOCLAW_RUNTIME_POLICY = config.runtimePolicy;
   const providerName = config.provider.toLowerCase() as ProviderName;
 
   log(`Starting v2 agent-runner (provider: ${providerName})`);
@@ -91,6 +92,7 @@ async function main(): Promise<void> {
     mcpServers,
     env: { ...process.env },
     additionalDirectories: additionalDirectories.length > 0 ? additionalDirectories : undefined,
+    runtimePolicy: config.runtimePolicy,
   });
 
   await runPollLoop({

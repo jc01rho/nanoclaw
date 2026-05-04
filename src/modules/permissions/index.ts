@@ -184,28 +184,33 @@ function handleUnknownSender(
 setSenderResolver(extractAndUpsertUser);
 
 setAccessGate((event, userId, mg, agentGroupId): AccessGateResult => {
-  // Public channels skip the access check entirely.
+  // Public channels allow any sender; trust level depends on identity.
   if (mg.unknown_sender_policy === 'public') {
-    if (userId) {
-      const decision = canAccessAgentGroup(userId, agentGroupId);
-      if (!decision.allowed && isOperationalIncidentReport(event)) {
-        log.info('MESSAGE RELAYED — public non-admin incident report', {
-          messagingGroupId: mg.id,
-          agentGroupId,
-          userId,
-          accessReason: decision.reason,
-        });
-        const parsed = safeParseContent(event.message.content);
-        relayUnknownSenderReport({
-          messagingGroupId: mg.id,
-          agentGroupId,
-          senderIdentity: userId,
-          senderName: parsed.sender ?? null,
-          event,
-        }).catch((err) => log.error('Report-relay flow threw', { err }));
-      }
+    if (!userId) {
+      return { allowed: true, senderTrust: 'public_guest' };
     }
-    return { allowed: true };
+    const decision = canAccessAgentGroup(userId, agentGroupId);
+    if (decision.allowed) {
+      return { allowed: true, senderTrust: decision.reason };
+    }
+    // Known user but not a member — public guest.
+    if (isOperationalIncidentReport(event)) {
+      log.info('MESSAGE RELAYED — public non-admin incident report', {
+        messagingGroupId: mg.id,
+        agentGroupId,
+        userId,
+        accessReason: decision.reason,
+      });
+      const parsed = safeParseContent(event.message.content);
+      relayUnknownSenderReport({
+        messagingGroupId: mg.id,
+        agentGroupId,
+        senderIdentity: userId,
+        senderName: parsed.sender ?? null,
+        event,
+      }).catch((err) => log.error('Report-relay flow threw', { err }));
+    }
+    return { allowed: true, senderTrust: 'public_guest' };
   }
 
   if (!userId) {
@@ -215,7 +220,7 @@ setAccessGate((event, userId, mg, agentGroupId): AccessGateResult => {
 
   const decision = canAccessAgentGroup(userId, agentGroupId);
   if (decision.allowed) {
-    return { allowed: true };
+    return { allowed: true, senderTrust: decision.reason };
   }
 
   handleUnknownSender(mg, userId, agentGroupId, decision.reason, event);
@@ -235,7 +240,7 @@ setSenderScopeGate(
     if (agent.sender_scope === 'all') return { allowed: true };
     if (!userId) return { allowed: false, reason: 'unknown_user_scope' };
     const decision = canAccessAgentGroup(userId, agent.agent_group_id);
-    if (decision.allowed) return { allowed: true };
+    if (decision.allowed) return { allowed: true, senderTrust: decision.reason };
     return { allowed: false, reason: `sender_scope_${decision.reason}` };
   },
 );

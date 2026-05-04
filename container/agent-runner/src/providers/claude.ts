@@ -5,6 +5,7 @@ import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '
 
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
 import { registerProvider } from './provider-registry.js';
+import { getConfig } from '../config.js';
 import type {
   AgentProvider,
   AgentQuery,
@@ -12,6 +13,7 @@ import type {
   ProviderEvent,
   ProviderOptions,
   QueryInput,
+  RuntimePolicy,
 } from './types.js';
 
 function log(msg: string): void {
@@ -41,28 +43,72 @@ const SDK_DISALLOWED_TOOLS = [
   'ExitWorktree',
 ];
 
-// Tool allowlist for NanoClaw agent containers
-const TOOL_ALLOWLIST = [
+const PUBLIC_GUEST_K8S_DENIED_TOOLS = new Set([
   'Bash',
-  'Read',
   'Write',
   'Edit',
-  'Glob',
-  'Grep',
-  'WebSearch',
-  'WebFetch',
+  'NotebookEdit',
   'Task',
   'TaskOutput',
   'TaskStop',
   'TeamCreate',
   'TeamDelete',
-  'SendMessage',
-  'TodoWrite',
-  'ToolSearch',
-  'Skill',
-  'NotebookEdit',
-  'mcp__nanoclaw__*',
-];
+]);
+
+const PUBLIC_GUEST_K8S_ALLOWED_MCP_TOOLS = new Set([
+  'mcp__nanoclaw__k8s_get',
+  'mcp__nanoclaw__k8s_describe',
+  'mcp__nanoclaw__k8s_logs',
+  'mcp__nanoclaw__k8s_events',
+  'mcp__nanoclaw__safe_restart_pod',
+]);
+
+export function getToolAllowlist(policy: RuntimePolicy): string[] {
+  const publicGuestReadTools = [
+    'Read',
+    'Glob',
+    'Grep',
+    'WebSearch',
+    'WebFetch',
+    'SendMessage',
+    'TodoWrite',
+    'ToolSearch',
+    'Skill',
+  ];
+
+  if (policy === 'public_guest_k8s') {
+    return [...publicGuestReadTools, ...PUBLIC_GUEST_K8S_ALLOWED_MCP_TOOLS];
+  }
+
+  return [
+    'Bash',
+    'Read',
+    'Write',
+    'Edit',
+    'Glob',
+    'Grep',
+    'WebSearch',
+    'WebFetch',
+    'Task',
+    'TaskOutput',
+    'TaskStop',
+    'TeamCreate',
+    'TeamDelete',
+    'SendMessage',
+    'TodoWrite',
+    'ToolSearch',
+    'Skill',
+    'NotebookEdit',
+    'mcp__nanoclaw__*',
+  ];
+}
+
+export function isToolAllowedByRuntimePolicy(toolName: string, policy: RuntimePolicy): boolean {
+  if (policy !== 'public_guest_k8s') return true;
+  if (PUBLIC_GUEST_K8S_DENIED_TOOLS.has(toolName)) return false;
+  if (toolName.startsWith('mcp__nanoclaw__')) return PUBLIC_GUEST_K8S_ALLOWED_MCP_TOOLS.has(toolName);
+  return getToolAllowlist(policy).includes(toolName);
+}
 
 interface SDKUserMessage {
   type: 'user';
@@ -181,6 +227,25 @@ export const preToolUseHook: HookCallback = async (input) => {
       stopReason: `Tool '${toolName}' is not available in this environment — use the nanoclaw equivalent.`,
     } as unknown as ReturnType<HookCallback>;
   }
+
+  try {
+    const { runtimePolicy } = getConfig();
+    if (!isToolAllowedByRuntimePolicy(toolName, runtimePolicy)) {
+      return {
+        decision: 'block',
+        stopReason: `Tool '${toolName}' is restricted under ${runtimePolicy} policy.`,
+      } as unknown as ReturnType<HookCallback>;
+    }
+  } catch (err) {
+    log(`PreToolUse: failed to check runtimePolicy: ${err instanceof Error ? err.message : String(err)}`);
+    if (isPublicGuestK8sEnv() && !isToolAllowedByRuntimePolicy(toolName, 'public_guest_k8s')) {
+      return {
+        decision: 'block',
+        stopReason: `Tool '${toolName}' is restricted under public_guest_k8s policy.`,
+      } as unknown as ReturnType<HookCallback>;
+    }
+  }
+
   // Bash exposes its timeout via the tool_input.timeout field (ms). Any other
   // tool: no declared timeout.
   const declaredTimeoutMs =
@@ -214,6 +279,10 @@ export function createArchiveSlug(summary?: string): string {
   if (rawSlug) return rawSlug;
   const now = new Date();
   return `conversation-${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}`;
+}
+
+function isPublicGuestK8sEnv(): boolean {
+  return process.env.NANOCLAW_RUNTIME_POLICY === 'public_guest_k8s';
 }
 
 function createPreCompactHook(assistantName?: string): HookCallback {
@@ -363,11 +432,13 @@ export class ClaudeProvider implements AgentProvider {
   private mcpServers: Record<string, McpServerConfig>;
   private env: Record<string, string | undefined>;
   private additionalDirectories?: string[];
+  private runtimePolicy: RuntimePolicy;
 
   constructor(options: ProviderOptions = {}) {
     this.assistantName = options.assistantName;
     this.mcpServers = options.mcpServers ?? {};
     this.additionalDirectories = options.additionalDirectories;
+    this.runtimePolicy = options.runtimePolicy ?? 'default';
     this.env = {
       ...(options.env ?? {}),
       CLAUDE_CODE_AUTO_COMPACT_WINDOW,
@@ -400,7 +471,7 @@ export class ClaudeProvider implements AgentProvider {
         systemPrompt: instructions
           ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions }
           : undefined,
-        allowedTools: TOOL_ALLOWLIST,
+        allowedTools: getToolAllowlist(this.runtimePolicy),
         disallowedTools: SDK_DISALLOWED_TOOLS,
         env: this.env,
         permissionMode: 'bypassPermissions',

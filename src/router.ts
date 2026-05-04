@@ -69,7 +69,14 @@ export function setSenderResolver(fn: SenderResolverFn): void {
  * own `dropped_messages` row on refusal (structural drops are already
  * recorded by core before the gate runs).
  */
-export type AccessGateResult = { allowed: true } | { allowed: false; reason: string };
+export type AccessGateResult =
+  | {
+      allowed: true;
+      senderTrust?: SenderTrust;
+    }
+  | { allowed: false; reason: string };
+
+export type SenderTrust = 'owner' | 'global_admin' | 'admin_of_group' | 'member' | 'public_guest';
 
 export type AccessGateFn = (
   event: InboundEvent,
@@ -264,11 +271,14 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
 
     const engages = evaluateEngage(agent, messageText, isMention, mg, event.threadId);
 
-    const accessOk = engages && (!accessGate || accessGate(event, userId, mg, agent.agent_group_id).allowed);
+    const accessResult = engages && accessGate ? accessGate(event, userId, mg, agent.agent_group_id) : null;
+    const accessOk = accessResult ? accessResult.allowed : true;
+    const senderTrust = accessResult?.allowed === true ? accessResult.senderTrust : undefined;
+
     const scopeOk = engages && (!senderScopeGate || senderScopeGate(event, userId, mg, agent).allowed);
 
     if (engages && accessOk && scopeOk) {
-      await deliverToAgent(agent, agentGroup, mg, event, userId, adapter?.supportsThreads === true, true);
+      await deliverToAgent(agent, agentGroup, mg, event, userId, adapter?.supportsThreads === true, true, senderTrust);
       engagedCount++;
 
       // Mention-sticky: ask the adapter to subscribe the thread so the
@@ -386,6 +396,7 @@ async function deliverToAgent(
   userId: string | null,
   adapterSupportsThreads: boolean,
   wake: boolean,
+  senderTrust?: SenderTrust,
 ): Promise<void> {
   // Apply the adapter thread policy: threaded adapter in a group chat →
   // per-thread session regardless of wiring. agent-shared preserved (it's
@@ -431,6 +442,8 @@ async function deliverToAgent(
     }
   }
 
+  const content = injectSenderTrust(event.message.content, event.message.kind, senderTrust);
+
   writeSessionMessage(session.agent_group_id, session.id, {
     id: messageIdForAgent(event.message.id, agent.agent_group_id),
     kind: event.message.kind,
@@ -438,7 +451,7 @@ async function deliverToAgent(
     platformId: deliveryAddr.platformId,
     channelType: deliveryAddr.channelType,
     threadId: deliveryAddr.threadId,
-    content: event.message.content,
+    content,
     trigger: wake ? 1 : 0,
   });
 
@@ -462,6 +475,26 @@ async function deliverToAgent(
       await wakeContainer(freshSession);
     }
   }
+}
+
+function injectSenderTrust(
+  rawContent: string,
+  kind: InboundEvent['message']['kind'],
+  senderTrust?: SenderTrust,
+): string {
+  if (!senderTrust || (kind !== 'chat' && kind !== 'chat-sdk')) return rawContent;
+  try {
+    const parsed: unknown = JSON.parse(rawContent);
+    if (!isJsonObject(parsed)) return rawContent;
+    const { senderTrust: _ignoredSenderTrust, ...rest } = parsed;
+    return JSON.stringify({ ...rest, senderTrust });
+  } catch {
+    return rawContent;
+  }
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

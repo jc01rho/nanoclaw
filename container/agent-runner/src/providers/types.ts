@@ -1,3 +1,5 @@
+export type RuntimePolicy = 'default' | 'public_guest_k8s';
+
 export interface AgentProvider {
   /**
    * True if the provider's underlying SDK handles slash commands natively and
@@ -25,6 +27,7 @@ export interface ProviderOptions {
   mcpServers?: Record<string, McpServerConfig>;
   env?: Record<string, string | undefined>;
   additionalDirectories?: string[];
+  runtimePolicy?: RuntimePolicy;
 }
 
 export interface QueryInput {
@@ -41,7 +44,7 @@ export interface QueryInput {
   cwd: string;
 
   /**
-   * System context to inject. Providers translate this into whatever their
+   * System context to inject. Providers translate this into whatever the
    * SDK expects (preset append, full system prompt, per-turn injection…).
    */
   systemContext?: {

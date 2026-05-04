@@ -6,6 +6,7 @@
  * instead of environment variables.
  */
 import fs from 'fs';
+import type { RuntimePolicy } from './providers/types.js';
 
 const CONFIG_PATH = '/workspace/agent/container.json';
 
@@ -16,6 +17,7 @@ export interface RunnerConfig {
   agentGroupId: string;
   maxMessagesPerPrompt: number;
   mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
+  runtimePolicy: RuntimePolicy;
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
@@ -43,6 +45,7 @@ export function loadConfig(): RunnerConfig {
     agentGroupId: (raw.agentGroupId as string) || '',
     maxMessagesPerPrompt: (raw.maxMessagesPerPrompt as number) || DEFAULT_MAX_MESSAGES,
     mcpServers: (raw.mcpServers as RunnerConfig['mcpServers']) || {},
+    runtimePolicy: parseRuntimePolicy(raw.runtimePolicy),
   };
 
   return _config;
@@ -52,4 +55,8 @@ export function loadConfig(): RunnerConfig {
 export function getConfig(): RunnerConfig {
   if (!_config) throw new Error('Config not loaded — call loadConfig() first');
   return _config;
+}
+
+function parseRuntimePolicy(value: unknown): RuntimePolicy {
+  return value === 'public_guest_k8s' ? 'public_guest_k8s' : 'default';
 }

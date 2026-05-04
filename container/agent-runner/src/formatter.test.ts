@@ -129,6 +129,16 @@ describe('XML escaping', () => {
     expect(result).toContain('sender="A &amp; B &lt;Co&gt;"');
     expect(result).toContain('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;');
   });
+
+  it('renders and escapes sender trust metadata', () => {
+    insertMessage('m1', 'chat', {
+      sender: 'Guest',
+      senderTrust: 'public_guest',
+      text: 'hello',
+    });
+    const result = formatMessages(getPendingMessages());
+    expect(result).toContain('trust="public_guest"');
+  });
 });
 
 describe('stripInternalTags', () => {
