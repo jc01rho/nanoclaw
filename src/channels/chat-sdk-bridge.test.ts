@@ -171,4 +171,43 @@ describe('createChatSdkBridge', () => {
 
     expect(onInbound).not.toHaveBeenCalled();
   });
+
+  it('splits long text across multiple postMessage calls when maxTextLength is set', async () => {
+    const postMessageCalls: Array<{ markdown: string }> = [];
+    const adapter = stubAdapter({
+      channelIdFromThreadId: (threadId: string) => `discord:${threadId}`,
+      postMessage: async (_tid: string, payload: { markdown: string }) => {
+        postMessageCalls.push(payload);
+        return { id: `msg-${postMessageCalls.length}`, raw: null, threadId: _tid };
+      },
+    });
+
+    const bridge = createChatSdkBridge({
+      adapter,
+      supportsThreads: false,
+      maxTextLength: 50,
+    });
+
+    await bridge.setup({
+      onInbound: vi.fn(),
+      onInboundEvent: vi.fn(),
+      onMetadata: vi.fn(),
+      onAction: vi.fn(),
+    });
+
+    const longText = 'a'.repeat(120);
+    await bridge.deliver('discord:123', 'thread:1', {
+      kind: 'chat',
+      content: { markdown: longText, operation: 'send' },
+    });
+
+    expect(postMessageCalls.length).toBeGreaterThan(1);
+
+    for (const call of postMessageCalls) {
+      expect(call.markdown.length).toBeLessThanOrEqual(50);
+    }
+
+    const reconstructed = postMessageCalls.map((c) => c.markdown).join('');
+    expect(reconstructed).toBe(longText);
+  });
 });

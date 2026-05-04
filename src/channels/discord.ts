@@ -38,6 +38,7 @@ registerChannelAdapter('discord', {
       ignoredAuthorIds: [env.DISCORD_APPLICATION_ID, botUserId].filter((v): v is string => Boolean(v)),
       extractReplyContext,
       supportsThreads: true,
+      maxTextLength: 2000,
     });
   },
 });
