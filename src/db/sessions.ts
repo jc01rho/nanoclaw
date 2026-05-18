@@ -67,6 +67,11 @@ export function getActiveSessions(): Session[] {
   return getDb().prepare("SELECT * FROM sessions WHERE status = 'active'").all() as Session[];
 }
 
+/** 모든 세션을 반환한다. 상태에 관계없이 스케줄 작업이 등록된 inactive 세션도 sweep 대상에 포함시키기 위해 사용한다. */
+export function getAllSessions(): Session[] {
+  return getDb().prepare('SELECT * FROM sessions').all() as Session[];
+}
+
 export function getRunningSessions(): Session[] {
   return getDb().prepare("SELECT * FROM sessions WHERE container_status IN ('running', 'idle')").all() as Session[];
 }

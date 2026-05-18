@@ -29,7 +29,7 @@
 import type Database from 'better-sqlite3';
 import fs from 'fs';
 
-import { getActiveSessions } from './db/sessions.js';
+import { getAllSessions } from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import {
   countDueMessages,
@@ -121,7 +121,7 @@ async function sweep(): Promise<void> {
   if (!running) return;
 
   try {
-    const sessions = getActiveSessions();
+    const sessions = getAllSessions();
     for (const session of sessions) {
       await sweepSession(session);
     }
