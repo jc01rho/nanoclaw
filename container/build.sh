@@ -1,10 +1,11 @@
 #!/bin/bash
 # Build the NanoClaw agent container image.
 #
-# Reads one optional build flag from ../.env:
+# Reads optional build flags from ../.env:
 #   INSTALL_CJK_FONTS=true   — add Chinese/Japanese/Korean fonts (~200MB)
+#   INSTALL_K8S_TOOLS=true   — add Python for Kubernetes diagnostic skills
 # setup/container.ts reads the same file, so both build paths stay in sync.
-# Callers can also override by exporting INSTALL_CJK_FONTS directly.
+# Callers can also override by exporting flags directly.
 
 set -e
 
@@ -25,11 +26,18 @@ CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-docker}"
 if [ -z "${INSTALL_CJK_FONTS:-}" ] && [ -f "../.env" ]; then
     INSTALL_CJK_FONTS="$(grep '^INSTALL_CJK_FONTS=' ../.env | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
 fi
+if [ -z "${INSTALL_K8S_TOOLS:-}" ] && [ -f "../.env" ]; then
+    INSTALL_K8S_TOOLS="$(grep '^INSTALL_K8S_TOOLS=' ../.env | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
+fi
 
 BUILD_ARGS=()
 if [ "${INSTALL_CJK_FONTS:-false}" = "true" ]; then
     echo "CJK fonts: enabled (adds ~200MB)"
     BUILD_ARGS+=(--build-arg INSTALL_CJK_FONTS=true)
+fi
+if [ "${INSTALL_K8S_TOOLS:-false}" = "true" ]; then
+    echo "K8s diagnostic tools: enabled (adds Python runtime)"
+    BUILD_ARGS+=(--build-arg INSTALL_K8S_TOOLS=true)
 fi
 
 echo "Building NanoClaw agent container image..."

@@ -160,16 +160,27 @@ export async function run(args: string[]): Promise<void> {
   const buildCmd = 'docker build';
   const runCmd = 'docker';
 
-  // Build-args from .env. Only INSTALL_CJK_FONTS is passed through today.
+  // Build-args from .env. Keep in sync with ./container/build.sh.
   // Keeps /setup and ./container/build.sh in sync — both read the same source.
   const buildArgs: string[] = [];
   try {
     const fs = await import('fs');
     const envPath = path.join(projectRoot, '.env');
     if (fs.existsSync(envPath)) {
-      const match = fs.readFileSync(envPath, 'utf-8').match(/^INSTALL_CJK_FONTS=(.+)$/m);
-      const val = match?.[1].trim().replace(/^["']|["']$/g, '').toLowerCase();
-      if (val === 'true') buildArgs.push('--build-arg INSTALL_CJK_FONTS=true');
+      const envText = fs.readFileSync(envPath, 'utf-8');
+      const cjkFonts = envText
+        .match(/^INSTALL_CJK_FONTS=(.+)$/m)?.[1]
+        .trim()
+        .replace(/^["']|["']$/g, '')
+        .toLowerCase();
+      if (cjkFonts === 'true') buildArgs.push('--build-arg INSTALL_CJK_FONTS=true');
+
+      const k8sTools = envText
+        .match(/^INSTALL_K8S_TOOLS=(.+)$/m)?.[1]
+        .trim()
+        .replace(/^["']|["']$/g, '')
+        .toLowerCase();
+      if (k8sTools === 'true') buildArgs.push('--build-arg INSTALL_K8S_TOOLS=true');
     }
   } catch {
     // .env is optional; absence is normal on a fresh checkout

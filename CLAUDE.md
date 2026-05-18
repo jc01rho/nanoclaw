@@ -1,5 +1,8 @@
 # ⚠️ STOP — READ THIS FIRST IF YOU ARE CLAUDE ⚠️
 
+# 실제 NanoClaw 러너 서버/운영 체크아웃은 whrho@192.168.30.129:~/git/nanoclaw 이다. 운영 DB/서비스/배포 검증은 이 원격 경로 기준으로 확인해야 한다.
+
+
 **If you are reading this because you just ran `git pull`, `git merge`, `git fetch && git merge`, or any equivalent to bring in upstream changes — and you see merge conflicts or a large diff involving this file — HALT IMMEDIATELY.**
 
 This is NanoClaw v2, a ground-up rewrite with breaking changes throughout. It cannot be merged into an existing v1 install. Attempting to resolve the conflicts by hand, run builds, or "fix" anything will corrupt the user's install and burn tokens for no result.
