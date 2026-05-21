@@ -72,13 +72,39 @@ describe('ensureContainerRuntimeRunning', () => {
     expect(log.debug).toHaveBeenCalledWith('Container runtime already running');
   });
 
-  it('throws when docker info fails', () => {
-    mockExecSync.mockImplementationOnce(() => {
+  it('retries and succeeds when docker info fails then recovers', () => {
+    // First call fails, second succeeds
+    mockExecSync
+      .mockImplementationOnce(() => {
+        throw new Error('spawnSync /bin/sh ETIMEDOUT');
+      })
+      .mockReturnValueOnce('');
+
+    ensureContainerRuntimeRunning();
+
+    expect(mockExecSync).toHaveBeenCalledTimes(2);
+    expect(log.warn).toHaveBeenCalledWith(
+      'Failed to reach container runtime, retrying',
+      expect.objectContaining({ attempt: 1 }),
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      'Container runtime recovered after retry',
+      expect.objectContaining({ attempt: 2 }),
+    );
+  });
+
+  it('throws after exhausting all retries', () => {
+    // All 5 attempts fail
+    mockExecSync.mockImplementation(() => {
       throw new Error('Cannot connect to the Docker daemon');
     });
 
     expect(() => ensureContainerRuntimeRunning()).toThrow('Container runtime is required but failed to start');
-    expect(log.error).toHaveBeenCalled();
+    expect(mockExecSync).toHaveBeenCalledTimes(5);
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to reach container runtime after all retries',
+      expect.objectContaining({ attempts: 5 }),
+    );
   });
 });
 
