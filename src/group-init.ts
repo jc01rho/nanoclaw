@@ -1,53 +1,35 @@
 import fs from 'fs';
 import path from 'path';
 
-import { ANTHROPIC_MODEL, DATA_DIR, GROUPS_DIR } from './config.js';
-import { initContainerConfig } from './container-config.js';
+import { DATA_DIR, GROUPS_DIR } from './config.js';
+import { ensureContainerConfig } from './db/container-configs.js';
 import { log } from './log.js';
 import type { AgentGroup } from './types.js';
 
-const DEFAULT_SETTINGS = {
-  model: ANTHROPIC_MODEL,
-  env: {
-    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-    CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-  },
-};
-
-const DEFAULT_SETTINGS_JSON = JSON.stringify(DEFAULT_SETTINGS, null, 2) + '\n';
-
-function syncSettingsFile(settingsFile: string): boolean {
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(settingsFile, DEFAULT_SETTINGS_JSON);
-    return true;
-  }
-
-  try {
-    const raw = JSON.parse(fs.readFileSync(settingsFile, 'utf-8')) as Record<string, unknown> & {
-      env?: Record<string, unknown>;
-    };
-    const next = {
-      ...raw,
-      model: ANTHROPIC_MODEL,
+const DEFAULT_SETTINGS_JSON =
+  JSON.stringify(
+    {
       env: {
-        ...DEFAULT_SETTINGS.env,
-        ...(raw.env ?? {}),
+        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+        CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
+        CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
       },
-    };
-    const nextJson = JSON.stringify(next, null, 2) + '\n';
-    const currentJson = JSON.stringify(raw, null, 2) + '\n';
-    if (nextJson !== currentJson) {
-      fs.writeFileSync(settingsFile, nextJson);
-      return true;
-    }
-  } catch {
-    fs.writeFileSync(settingsFile, DEFAULT_SETTINGS_JSON);
-    return true;
-  }
-
-  return false;
-}
+      hooks: {
+        PreCompact: [
+          {
+            hooks: [
+              {
+                type: 'command',
+                command: 'bun /app/src/compact-instructions.ts',
+              },
+            ],
+          },
+        ],
+      },
+    },
+    null,
+    2,
+  ) + '\n';
 
 /**
  * Initialize the on-disk filesystem state for an agent group. Idempotent —
@@ -83,12 +65,10 @@ export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: s
     initialized.push('CLAUDE.local.md');
   }
 
-  // groups/<folder>/container.json — empty container config, replaces the
-  // former agent_groups.container_config DB column. Self-modification flows
-  // read and write this file directly.
-  if (initContainerConfig(group.folder)) {
-    initialized.push('container.json');
-  }
+  // Ensure container_configs row exists in the DB. Idempotent — no-op if
+  // the row already exists (e.g. created by backfill or group creation).
+  ensureContainerConfig(group.id);
+  initialized.push('container_configs');
 
   // 2. data/v2-sessions/<id>/.claude-shared/ — Claude state + per-group skills
   const claudeDir = path.join(DATA_DIR, 'v2-sessions', group.id, '.claude-shared');
@@ -98,8 +78,11 @@ export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: s
   }
 
   const settingsFile = path.join(claudeDir, 'settings.json');
-  if (syncSettingsFile(settingsFile)) {
+  if (!fs.existsSync(settingsFile)) {
+    fs.writeFileSync(settingsFile, DEFAULT_SETTINGS_JSON);
     initialized.push('settings.json');
+  } else {
+    ensurePreCompactHook(settingsFile, initialized);
   }
 
   // Skills directory — created empty here; symlinks are synced at spawn
@@ -117,5 +100,34 @@ export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: s
       id: group.id,
       steps: initialized,
     });
+  }
+}
+
+const PRE_COMPACT_COMMAND = 'bun /app/src/compact-instructions.ts';
+
+/**
+ * Patch an existing settings.json to add the PreCompact hook if missing.
+ * Runs on every group init so pre-existing groups pick up the hook.
+ */
+function ensurePreCompactHook(settingsFile: string, initialized: string[]): void {
+  try {
+    const raw = fs.readFileSync(settingsFile, 'utf-8');
+    const settings = JSON.parse(raw);
+
+    // Check if there's already a PreCompact hook with our command.
+    const existing = settings.hooks?.PreCompact as unknown[] | undefined;
+    if (existing && JSON.stringify(existing).includes(PRE_COMPACT_COMMAND)) return;
+
+    // Add the hook, preserving existing hooks.
+    if (!settings.hooks) settings.hooks = {};
+    if (!settings.hooks.PreCompact) settings.hooks.PreCompact = [];
+    settings.hooks.PreCompact.push({
+      hooks: [{ type: 'command', command: PRE_COMPACT_COMMAND }],
+    });
+
+    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
+    initialized.push('settings.json (added PreCompact hook)');
+  } catch {
+    // Don't break init if settings.json is malformed — it'll use whatever's there.
   }
 }

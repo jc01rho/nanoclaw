@@ -18,6 +18,8 @@ export interface RunnerConfig {
   maxMessagesPerPrompt: number;
   mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
   runtimePolicy: RuntimePolicy;
+  model?: string;
+  effort?: string;
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
@@ -46,6 +48,8 @@ export function loadConfig(): RunnerConfig {
     maxMessagesPerPrompt: (raw.maxMessagesPerPrompt as number) || DEFAULT_MAX_MESSAGES,
     mcpServers: (raw.mcpServers as RunnerConfig['mcpServers']) || {},
     runtimePolicy: parseRuntimePolicy(raw.runtimePolicy),
+    model: (raw.model as string) || undefined,
+    effort: (raw.effort as string) || undefined,
   };
 
   return _config;

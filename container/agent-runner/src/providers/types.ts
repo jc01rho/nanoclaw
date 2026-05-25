@@ -16,6 +16,21 @@ export interface AgentProvider {
    * (missing transcript, unknown session, etc.) and should be cleared.
    */
   isSessionInvalid(err: unknown): boolean;
+
+  /**
+   * Optional pre-resume maintenance. Given the stored continuation token,
+   * decide whether its backing transcript has grown too large or too old to
+   * resume cheaply. Return a non-null reason string to tell the caller to drop
+   * the continuation and start a fresh session (the provider archives any
+   * recoverable summary first); return null to keep resuming.
+   *
+   * Guards the cold-resume failure mode: a long-lived hub session accumulates
+   * days of history — including base64 image blocks the agent Read — and the
+   * SDK reloads the whole .jsonl on every resume. Past a threshold the first
+   * turn alone can exceed the host's idle ceiling, so the container is killed
+   * before it ever replies. Providers without an on-disk transcript omit this.
+   */
+  maybeRotateContinuation?(continuation: string, cwd: string): string | null;
 }
 
 /**
@@ -28,6 +43,16 @@ export interface ProviderOptions {
   env?: Record<string, string | undefined>;
   additionalDirectories?: string[];
   runtimePolicy?: RuntimePolicy;
+  /**
+   * Model alias (`sonnet`, `opus`, `haiku`) or full model ID. Passed through
+   * to the underlying SDK. If omitted, the SDK default is used.
+   */
+  model?: string;
+  /**
+   * Reasoning effort (`'low' | 'medium' | 'high' | 'xhigh' | 'max'`). Passed
+   * through to the underlying SDK. If omitted, the SDK default is used.
+   */
+  effort?: string;
 }
 
 export interface QueryInput {

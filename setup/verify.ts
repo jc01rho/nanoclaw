@@ -14,9 +14,13 @@ import Database from 'better-sqlite3';
 import { DATA_DIR } from '../src/config.js';
 import { readEnvFile } from '../src/env.js';
 import { log } from '../src/log.js';
-import { pingCliAgent, type PingResult } from './lib/agent-ping.js';
 import { getLaunchdLabel, getSystemdUnit } from '../src/install-slug.js';
-import { getPlatform, getServiceManager, hasSystemd, isRoot } from './platform.js';
+import {
+  getPlatform,
+  getServiceManager,
+  hasSystemd,
+  isRoot,
+} from './platform.js';
 import { emitStatus } from './status.js';
 
 export async function run(_args: string[]): Promise<void> {
@@ -28,12 +32,17 @@ export async function run(_args: string[]): Promise<void> {
 
   // 1. Check service status + detect checkout mismatch.
   //
-  // Why the mismatch matters: the host binds `<DATA_DIR>/cli.sock` relative
-  // to the project root it was started from. If the running service is from
-  // a sibling checkout (common for developers with multiple clones), this
-  // repo's `data/cli.sock` won't exist — AGENT_PING would return a
-  // misleading `socket_error`. Surface the mismatch directly instead.
-  let service: 'not_found' | 'stopped' | 'running' | 'running_other_checkout' = 'not_found';
+  // Why the mismatch matters: the host reads `<projectRoot>/data/v2.db` and
+  // binds `<DATA_DIR>/cli.sock` relative to the project root it was started
+  // from. If the running service is from a sibling checkout (common for
+  // developers with multiple clones), nothing in this checkout is actually
+  // wired up. Surface the mismatch directly so the user knows to point the
+  // service at the right folder.
+  let service:
+    | 'not_found'
+    | 'stopped'
+    | 'running'
+    | 'running_other_checkout' = 'not_found';
   let runningFromPath: string | null = null;
   const mgr = getServiceManager();
 
@@ -65,7 +74,10 @@ export async function run(_args: string[]): Promise<void> {
       execSync(`${prefix} is-active ${systemdUnit}`, { stdio: 'ignore' });
       service = 'running';
       try {
-        const pidStr = execSync(`${prefix} show ${systemdUnit} -p MainPID --value`, { encoding: 'utf-8' }).trim();
+        const pidStr = execSync(
+          `${prefix} show ${systemdUnit} -p MainPID --value`,
+          { encoding: 'utf-8' },
+        ).trim();
         const pid = Number(pidStr);
         if (Number.isInteger(pid) && pid > 0) {
           runningFromPath = resolveBinaryScript(pid);
@@ -103,7 +115,11 @@ export async function run(_args: string[]): Promise<void> {
     }
   }
 
-  if (service === 'running' && runningFromPath && !isPathInside(runningFromPath, projectRoot)) {
+  if (
+    service === 'running' &&
+    runningFromPath &&
+    !isPathInside(runningFromPath, projectRoot)
+  ) {
     service = 'running_other_checkout';
   }
 
@@ -123,7 +139,7 @@ export async function run(_args: string[]): Promise<void> {
   const envFile = path.join(projectRoot, '.env');
   if (fs.existsSync(envFile)) {
     const envContent = fs.readFileSync(envFile, 'utf-8');
-    if (/^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN)=/m.test(envContent)) {
+    if (/^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ONECLI_URL)=/m.test(envContent)) {
       credentials = 'configured';
     }
   }
@@ -170,7 +186,6 @@ export async function run(_args: string[]): Promise<void> {
   if (has('IMESSAGE_ENABLED')) channelAuth.imessage = 'configured';
 
   const configuredChannels = Object.keys(channelAuth);
-  const anyChannelConfigured = configuredChannels.length > 0;
 
   // 5. Check registered groups in v2 central DB (agent_groups + messaging_group_agents)
   let registeredGroups = 0;
@@ -194,27 +209,20 @@ export async function run(_args: string[]): Promise<void> {
 
   // 6. Check mount allowlist
   let mountAllowlist = 'missing';
-  if (fs.existsSync(path.join(homeDir, '.config', 'nanoclaw', 'mount-allowlist.json'))) {
+  if (
+    fs.existsSync(
+      path.join(homeDir, '.config', 'nanoclaw', 'mount-allowlist.json'),
+    )
+  ) {
     mountAllowlist = 'configured';
   }
 
-  // 7. End-to-end: ping the CLI agent and confirm it replies. Only run if
-  // everything upstream looks healthy, since a broken socket would just hang.
-  let agentPing: 'ok' | 'no_reply' | 'socket_error' | 'auth_error' | 'skipped' = 'skipped';
-  if (service === 'running' && registeredGroups > 0) {
-    log.info('Pinging CLI agent');
-    agentPing = await pingCliAgent();
-    log.info('Agent ping result', { agentPing });
-  }
-
-  // Determine overall status. A CLI-only install is valid when the local
-  // agent round-trip succeeds; messaging app credentials are optional.
+  // Determine overall status. The cli-agent step earlier in setup already
+  // proved the agent round-trip works; verify is a static health check.
   const status = determineVerifyStatus({
     service,
     credentials,
-    anyChannelConfigured,
     registeredGroups,
-    agentPing,
   });
 
   log.info('Verification complete', { status, channelAuth });
@@ -227,7 +235,6 @@ export async function run(_args: string[]): Promise<void> {
     CHANNEL_AUTH: JSON.stringify(channelAuth),
     REGISTERED_GROUPS: registeredGroups,
     MOUNT_ALLOWLIST: mountAllowlist,
-    AGENT_PING: agentPing,
     STATUS: status,
     LOG: 'logs/setup.log',
   });
@@ -238,18 +245,11 @@ export async function run(_args: string[]): Promise<void> {
 export function determineVerifyStatus(input: {
   service: 'not_found' | 'stopped' | 'running' | 'running_other_checkout';
   credentials: string;
-  anyChannelConfigured: boolean;
   registeredGroups: number;
-  agentPing: PingResult | 'skipped';
 }): 'success' | 'failed' {
-  const cliAgentResponds = input.agentPing === 'ok';
-  const hasUsableChannel = input.anyChannelConfigured || cliAgentResponds;
-
   return input.service === 'running' &&
     input.credentials !== 'missing' &&
-    hasUsableChannel &&
-    input.registeredGroups > 0 &&
-    (cliAgentResponds || input.agentPing === 'skipped')
+    input.registeredGroups > 0
     ? 'success'
     : 'failed';
 }

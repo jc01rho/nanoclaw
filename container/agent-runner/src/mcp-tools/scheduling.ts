@@ -94,6 +94,9 @@ export const scheduleTask: McpToolDefinition = {
         skipWeekends,
         processAfter,
         recurrence,
+        platformId: r.platform_id,
+        channelType: r.channel_type,
+        threadId: r.thread_id,
       }),
     });
 

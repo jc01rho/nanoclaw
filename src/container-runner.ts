@@ -7,22 +7,21 @@ import { ChildProcess, execSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
+import { OneCLI } from '@onecli-sh/sdk';
+
 import {
-  ANTHROPIC_API_KEY,
-  ANTHROPIC_AUTH_TOKEN,
-  ANTHROPIC_BASE_URL,
-  ANTHROPIC_MODEL,
-  CLAUDE_CODE_OAUTH_TOKEN,
   CONTAINER_IMAGE,
   CONTAINER_IMAGE_BASE,
   CONTAINER_INSTALL_LABEL,
   DATA_DIR,
   GROUPS_DIR,
-  OLLAMA_HOST,
-  OLLAMA_ADMIN_TOOLS,
+  ONECLI_API_KEY,
+  ONECLI_URL,
   TIMEZONE,
 } from './config.js';
-import { readContainerConfig, writeContainerConfig } from './container-config.js';
+import { materializeContainerJson } from './container-config.js';
+import { getContainerConfig } from './db/container-configs.js';
+import { updateContainerConfigScalars, updateContainerConfigJson } from './db/container-configs.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
@@ -48,18 +47,20 @@ import {
 } from './session-manager.js';
 import type { AgentGroup, Session } from './types.js';
 
+const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
+
 /** Active containers tracked by session ID. */
 const activeContainers = new Map<string, { process: ChildProcess; containerName: string }>();
 
 /**
  * In-flight wake promises, keyed by session id. Deduplicates concurrent
  * `wakeContainer` calls while the first spawn is still mid-setup (async
- * buildContainerArgs, provider env wiring, etc.) — otherwise a second
+ * buildContainerArgs, OneCLI gateway apply, etc.) — otherwise a second
  * wake in that window passes the `activeContainers.has` check and spawns
  * a duplicate container against the same session directory, producing
  * racy double-replies.
  */
-const wakePromises = new Map<string, Promise<void>>();
+const wakePromises = new Map<string, Promise<boolean>>();
 
 export function getActiveContainerCount(): number {
   return activeContainers.size;
@@ -74,20 +75,32 @@ export function isContainerRunning(sessionId: string): boolean {
  * (the in-flight wake promise is reused).
  *
  * The container runs the v2 agent-runner which polls the session DB.
+ *
+ * Contract: never throws. Returns `true` on successful spawn, `false` on
+ * transient spawn failure (e.g. OneCLI gateway unreachable). Callers don't
+ * need to wrap — the inbound row stays pending and host-sweep retries on
+ * its next tick. Callers that care (e.g. the router's typing indicator)
+ * can branch on the boolean.
  */
-export function wakeContainer(session: Session): Promise<void> {
+export function wakeContainer(session: Session): Promise<boolean> {
   if (activeContainers.has(session.id)) {
     log.debug('Container already running', { sessionId: session.id });
-    return Promise.resolve();
+    return Promise.resolve(true);
   }
   const existing = wakePromises.get(session.id);
   if (existing) {
     log.debug('Container wake already in-flight — joining existing promise', { sessionId: session.id });
     return existing;
   }
-  const promise = spawnContainer(session).finally(() => {
-    wakePromises.delete(session.id);
-  });
+  const promise = spawnContainer(session)
+    .then(() => true)
+    .catch((err) => {
+      log.warn('wakeContainer failed — host-sweep will retry', { sessionId: session.id, err });
+      return false;
+    })
+    .finally(() => {
+      wakePromises.delete(session.id);
+    });
   wakePromises.set(session.id, promise);
   return promise;
 }
@@ -108,13 +121,10 @@ async function spawnContainer(session: Session): Promise<void> {
   }
   writeSessionRouting(agentGroup.id, session.id);
 
-  // Read container config once — threaded through provider resolution,
-  // buildMounts, and buildContainerArgs so we don't re-read the file.
-  const containerConfig = readContainerConfig(agentGroup.folder);
-
-  // Ensure container.json has the agent group identity fields the runner needs.
-  // Written at spawn time so the runner can read them from the RO mount.
-  ensureRuntimeFields(containerConfig, agentGroup);
+  // Materialize container.json from DB — writes fresh file and returns
+  // the config object, threaded through provider resolution, buildMounts,
+  // and buildContainerArgs so we don't re-read.
+  const containerConfig = materializeContainerJson(agentGroup.id);
 
   // Resolve the effective provider + any host-side contribution it declares
   // (extra mounts, env passthrough). Computed once and threaded through both
@@ -123,7 +133,18 @@ async function spawnContainer(session: Session): Promise<void> {
 
   const mounts = buildMounts(agentGroup, session, containerConfig, contribution);
   const containerName = `nanoclaw-v2-${agentGroup.folder}-${Date.now()}`;
-  const args = await buildContainerArgs(mounts, containerName, agentGroup, containerConfig, provider, contribution);
+  // OneCLI agent identifier is always the agent group id — stable across
+  // sessions and reversible via getAgentGroup() for approval routing.
+  const agentIdentifier = agentGroup.id;
+  const args = await buildContainerArgs(
+    mounts,
+    containerName,
+    agentGroup,
+    containerConfig,
+    provider,
+    contribution,
+    agentIdentifier,
+  );
 
   log.info('Spawning container', { sessionId: session.id, agentGroup: agentGroup.name, containerName });
 
@@ -169,9 +190,13 @@ async function spawnContainer(session: Session): Promise<void> {
 }
 
 /** Kill a container for a session. */
-export function killContainer(sessionId: string, reason: string): void {
+export function killContainer(sessionId: string, reason: string, onExit?: () => void): void {
   const entry = activeContainers.get(sessionId);
   if (!entry) return;
+
+  if (onExit) {
+    entry.process.once('close', onExit);
+  }
 
   log.info('Killing container', { sessionId, reason, containerName: entry.containerName });
   try {
@@ -182,22 +207,19 @@ export function killContainer(sessionId: string, reason: string): void {
 }
 
 /**
- * Resolve the provider name for a session using the precedence documented in
- * the provider-install skills:
+ * Resolve the provider name for a session:
  *
  *   sessions.agent_provider
- *     → agent_groups.agent_provider
- *     → container.json `provider`
+ *     → container_configs.provider
  *     → 'claude'
  *
  * Pure so the precedence can be unit-tested without a DB or filesystem.
  */
 export function resolveProviderName(
   sessionProvider: string | null | undefined,
-  agentGroupProvider: string | null | undefined,
   containerConfigProvider: string | null | undefined,
 ): string {
-  return (sessionProvider || agentGroupProvider || containerConfigProvider || 'claude').toLowerCase();
+  return (sessionProvider || containerConfigProvider || 'claude').toLowerCase();
 }
 
 function resolveProviderContribution(
@@ -205,7 +227,7 @@ function resolveProviderContribution(
   agentGroup: AgentGroup,
   containerConfig: import('./container-config.js').ContainerConfig,
 ): { provider: string; contribution: ProviderContainerContribution } {
-  const provider = resolveProviderName(session.agent_provider, agentGroup.agent_provider, containerConfig.provider);
+  const provider = resolveProviderName(session.agent_provider, containerConfig.provider);
   const fn = getProviderContainerConfig(provider);
   const contribution = fn
     ? fn({
@@ -247,13 +269,6 @@ function buildMounts(
 
   // Agent group folder at /workspace/agent (RW for working files + CLAUDE.local.md)
   mounts.push({ hostPath: groupDir, containerPath: '/workspace/agent', readonly: false });
-
-  // Report-evaluator sometimes needs to inspect the originating agent group's
-  // IaC workspace. Expose all group folders read-only at a separate path so it
-  // can read the source workspace without losing its own /workspace/agent.
-  if (agentGroup.folder === 'report-evaluator' && fs.existsSync(GROUPS_DIR)) {
-    mounts.push({ hostPath: GROUPS_DIR, containerPath: '/workspace/groups', readonly: true });
-  }
 
   // container.json — nested RO mount on top of RW group dir so the agent
   // can read its config but cannot modify it.
@@ -381,34 +396,6 @@ function syncSkillSymlinks(claudeDir: string, containerConfig: import('./contain
   }
 }
 
-/**
- * Ensure container.json has the runtime identity fields the runner needs.
- * Written at spawn time so they're always current even if the DB values
- * change (e.g. group rename). Only writes if values differ to avoid
- * unnecessary file churn.
- */
-function ensureRuntimeFields(
-  containerConfig: import('./container-config.js').ContainerConfig,
-  agentGroup: AgentGroup,
-): void {
-  let dirty = false;
-  if (containerConfig.agentGroupId !== agentGroup.id) {
-    containerConfig.agentGroupId = agentGroup.id;
-    dirty = true;
-  }
-  if (containerConfig.groupName !== agentGroup.name) {
-    containerConfig.groupName = agentGroup.name;
-    dirty = true;
-  }
-  if (containerConfig.assistantName !== agentGroup.name) {
-    containerConfig.assistantName = agentGroup.name;
-    dirty = true;
-  }
-  if (dirty) {
-    writeContainerConfig(agentGroup.folder, containerConfig);
-  }
-}
-
 async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
@@ -416,6 +403,7 @@ async function buildContainerArgs(
   containerConfig: import('./container-config.js').ContainerConfig,
   provider: string,
   providerContribution: ProviderContainerContribution,
+  agentIdentifier?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '--rm', '--name', containerName, '--label', CONTAINER_INSTALL_LABEL];
 
@@ -423,20 +411,26 @@ async function buildContainerArgs(
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  if (ANTHROPIC_BASE_URL) args.push('-e', `ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}`);
-  if (ANTHROPIC_API_KEY) args.push('-e', `ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}`);
-  if (ANTHROPIC_AUTH_TOKEN) args.push('-e', `ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}`);
-  if (CLAUDE_CODE_OAUTH_TOKEN) args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}`);
-  if (ANTHROPIC_MODEL) args.push('-e', `ANTHROPIC_MODEL=${ANTHROPIC_MODEL}`);
-  if (OLLAMA_HOST) args.push('-e', `OLLAMA_HOST=${OLLAMA_HOST}`);
-  if (OLLAMA_ADMIN_TOOLS) args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
-
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {
       args.push('-e', `${key}=${value}`);
     }
   }
+
+  // OneCLI gateway — injects HTTPS_PROXY + certs so container API calls
+  // are routed through the agent vault for credential injection. Treated as
+  // a transient hard failure: if we can't wire the gateway, we don't spawn.
+  // The caller (router or host-sweep) catches the throw, leaves the inbound
+  // message pending, and the next sweep tick retries.
+  if (agentIdentifier) {
+    await onecli.ensureAgent({ name: agentGroup.name, identifier: agentIdentifier });
+  }
+  const onecliApplied = await onecli.applyContainerConfig(args, { addHostMapping: false, agent: agentIdentifier });
+  if (!onecliApplied) {
+    throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
+  }
+  log.info('OneCLI gateway applied', { containerName });
 
   // Host gateway
   args.push(...hostGatewayArgs());
@@ -475,10 +469,10 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
   const agentGroup = getAgentGroup(agentGroupId);
   if (!agentGroup) throw new Error('Agent group not found');
 
-  const containerConfig = readContainerConfig(agentGroup.folder);
-  const aptPackages = containerConfig.packages.apt;
-  const npmPackages = containerConfig.packages.npm;
-
+  const configRow = getContainerConfig(agentGroup.id);
+  if (!configRow) throw new Error('Container config not found');
+  const aptPackages = JSON.parse(configRow.packages_apt) as string[];
+  const npmPackages = JSON.parse(configRow.packages_npm) as string[];
   if (aptPackages.length === 0 && npmPackages.length === 0) {
     throw new Error('No packages to install. Use install_packages first.');
   }
@@ -508,15 +502,14 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
     execSync(`${CONTAINER_RUNTIME_BIN} build -t ${imageTag} -f ${tmpDockerfile} .`, {
       cwd: DATA_DIR,
       stdio: 'pipe',
-      timeout: 300_000,
+      timeout: 900_000,
     });
   } finally {
     fs.unlinkSync(tmpDockerfile);
   }
 
-  // Store the image tag in groups/<folder>/container.json
-  containerConfig.imageTag = imageTag;
-  writeContainerConfig(agentGroup.folder, containerConfig);
+  // Store the image tag in the DB
+  updateContainerConfigScalars(agentGroup.id, { image_tag: imageTag });
 
   log.info('Per-agent-group image built', { agentGroupId, imageTag });
 }

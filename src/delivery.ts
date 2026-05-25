@@ -242,6 +242,7 @@ async function deliverMessage(
     channel_type: string | null;
     thread_id: string | null;
     content: string;
+    in_reply_to: string | null;
   },
   session: Session,
   inDb: Database.Database,
