@@ -15,7 +15,7 @@
 import type Database from 'better-sqlite3';
 import type { Migration } from './index.js';
 
-export const migration013: Migration = {
+export const migration014: Migration = {
   version: 13,
   name: 'approval-render-metadata',
   up(db: Database.Database) {

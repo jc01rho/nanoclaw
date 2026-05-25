@@ -1,0 +1,26 @@
+
+
+<output>
+<compartments>
+<compartment start="62" end="69" title="Discord credentials 복구 및 배포 완료">
+사용자가 Discord credentials(AppID, pubKey, token)를 제공했다. 로컬 `.env`에 해당 값들을 추가한 후 원격 서버(192.168.30.129)에 동기화하고, 호스트 빌드, 컨테이너 이미지 재빌드, 서비스 재시작을 수행했다. Discord 어댑터가 정상 연결(`infraClaw`, PID 78048)되어 ANTHROPIC_MODEL=mimo-v2.5-pro, claude 바이너리 경로, Discord 봇 연결 모두 정상 확인됨.
+</compartment>
+
+<compartment start="70" end="86" title="Claude Code 바이너리 경로 2차 수정 (네이티브 바이너리 경로로)">
+`/pnpm/bin/claude`로 변경 후에도 같은 오류가 발생했다. 원격 컨테이너 내부를 조사한 결과, `/pnpm/claude`는 868B 쉘 래퍼 스크립트이고 실제 네이티브 바이너리는 `/pnpm/claude-code-linux-x64/cli.js` 또는 유사 경로에 위치하는 것으로 확인됨. 이전에 `/pnpm/claude` → `/pnpm/bin/claude`로 변경한 것이 잘못되었으며, 새로 발견한 내용을 바탕으로 수정이 진행 중. 호스트 TypeScript 빌드까지 완료 후 서비스 재시작 대기 상태.
+</compartment>
+</compartments>
+
+<facts>
+<CONSTRAINTS>
+* Discord 어댑터는 `.env`에서 `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `DISCORD_APPLICATION_ID`를 읽는다. 값이 없으면 어댑터가 null을 반환하여 채널 초기화가 스킵된다.
+* rsync 배포 시 로컬 .env가 원격 .env를 덮어쓸 수 있으므로, 원격에 credentials가 있는 경우 배포 전 반드시 보존해야 한다.
+* `/pnpm/claude`는 쉘 래퍼 스크립트(868B)이며, Claude Code SDK는 네이티브 바이너리를 요구한다. 래퍼 경로를 지정하면 "native binary not found" 오류가 발생한다.
+</CONSTRAINTS>
+</facts>
+
+<meta>
+<messages_processed>62-86</messages_processed>
+<unprocessed_from>86</unprocessed_from>
+</meta>
+</output>

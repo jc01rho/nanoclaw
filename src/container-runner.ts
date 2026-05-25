@@ -7,16 +7,17 @@ import { ChildProcess, execSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import { OneCLI } from '@onecli-sh/sdk';
-
 import {
+  ANTHROPIC_API_KEY,
+  ANTHROPIC_AUTH_TOKEN,
+  ANTHROPIC_BASE_URL,
+  ANTHROPIC_MODEL,
+  CLAUDE_CODE_OAUTH_TOKEN,
   CONTAINER_IMAGE,
   CONTAINER_IMAGE_BASE,
   CONTAINER_INSTALL_LABEL,
   DATA_DIR,
   GROUPS_DIR,
-  ONECLI_API_KEY,
-  ONECLI_URL,
   TIMEZONE,
 } from './config.js';
 import { materializeContainerJson } from './container-config.js';
@@ -47,7 +48,7 @@ import {
 } from './session-manager.js';
 import type { AgentGroup, Session } from './types.js';
 
-const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
+const onecli = null; // OneCLI disabled — using .env-based credential injection
 
 /** Active containers tracked by session ID. */
 const activeContainers = new Map<string, { process: ChildProcess; containerName: string }>();
@@ -418,19 +419,13 @@ async function buildContainerArgs(
     }
   }
 
-  // OneCLI gateway — injects HTTPS_PROXY + certs so container API calls
-  // are routed through the agent vault for credential injection. Treated as
-  // a transient hard failure: if we can't wire the gateway, we don't spawn.
-  // The caller (router or host-sweep) catches the throw, leaves the inbound
-  // message pending, and the next sweep tick retries.
-  if (agentIdentifier) {
-    await onecli.ensureAgent({ name: agentGroup.name, identifier: agentIdentifier });
-  }
-  const onecliApplied = await onecli.applyContainerConfig(args, { addHostMapping: false, agent: agentIdentifier });
-  if (!onecliApplied) {
-    throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
-  }
-  log.info('OneCLI gateway applied', { containerName });
+  // Credential injection — pass .env credentials directly into container
+  // This replaces the OneCLI gateway approach; credentials are injected at spawn time
+  if (ANTHROPIC_BASE_URL) args.push('-e', `ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}`);
+  if (ANTHROPIC_API_KEY) args.push('-e', `ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}`);
+  if (ANTHROPIC_AUTH_TOKEN) args.push('-e', `ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}`);
+  if (CLAUDE_CODE_OAUTH_TOKEN) args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}`);
+  if (ANTHROPIC_MODEL) args.push('-e', `ANTHROPIC_MODEL=${ANTHROPIC_MODEL}`);
 
   // Host gateway
   args.push(...hostGatewayArgs());
