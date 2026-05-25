@@ -467,7 +467,8 @@ export class ClaudeProvider implements AgentProvider {
         cwd: input.cwd,
         additionalDirectories: this.additionalDirectories,
         resume: input.continuation,
-        pathToClaudeCodeExecutable: '/pnpm/claude',
+        pathToClaudeCodeExecutable:
+          '/pnpm/global/5/.pnpm/@anthropic-ai+claude-code-linux-x64@2.1.116/node_modules/@anthropic-ai/claude-code-linux-x64/claude',
         systemPrompt: instructions
           ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions }
           : undefined,
