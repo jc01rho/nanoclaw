@@ -13,6 +13,7 @@ import {
   stripInternalTags,
   type RoutingContext,
 } from './formatter.js';
+import { isUploadTraceCommand, uploadTrace } from './upload-trace.js';
 import type { AgentProvider, AgentQuery, ProviderEvent, RuntimePolicy } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
@@ -161,6 +162,19 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         commandIds.push(msg.id);
         continue;
       }
+      if ((msg.kind === 'chat' || msg.kind === 'chat-sdk') && isUploadTraceCommand(msg)) {
+        log('Uploading session trace to Hugging Face');
+        writeMessageOut({
+          id: generateId(),
+          kind: 'chat',
+          platform_id: routing.platformId,
+          channel_type: routing.channelType,
+          thread_id: routing.threadId,
+          content: JSON.stringify({ text: uploadTrace() }),
+        });
+        commandIds.push(msg.id);
+        continue;
+      }
       normalMessages.push(msg);
     }
 
@@ -201,7 +215,6 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // Format messages: passthrough commands get raw text (only if the
     // provider natively handles slash commands), others get XML.
     const prompt = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
-    const turnRuntimePolicy = runtimePolicyForMessages(keep);
 
     log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
 
@@ -210,7 +223,6 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       continuation,
       cwd: config.cwd,
       systemContext: config.systemContext,
-      runtimePolicy: turnRuntimePolicy,
     });
 
     // Process the query while concurrently polling for new messages
@@ -220,9 +232,10 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // can stamp it on outbound rows — needed for a2a return-path routing.
     setCurrentInReplyTo(routing.inReplyTo);
     try {
-      const result = await processQuery(query, routing, processingIds, config.providerName, turnRuntimePolicy);
+      const result = await processQuery(query, routing, processingIds, config.providerName);
       if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
+        setContinuation(config.providerName, continuation);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -238,18 +251,14 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       }
 
       // Write error response so the user knows something went wrong
-      try {
-        writeMessageOut({
-          id: generateId(),
-          kind: 'chat',
-          platform_id: routing.platformId,
-          channel_type: routing.channelType,
-          thread_id: routing.threadId,
-          content: JSON.stringify({ text: `Error: ${errMsg}` }),
-        });
-      } catch (writeErr) {
-        log(`Failed to write query error response: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`);
-      }
+      writeMessageOut({
+        id: generateId(),
+        kind: 'chat',
+        platform_id: routing.platformId,
+        channel_type: routing.channelType,
+        thread_id: routing.threadId,
+        content: JSON.stringify({ text: `Error: ${errMsg}` }),
+      });
     } finally {
       clearCurrentInReplyTo();
     }
@@ -295,20 +304,6 @@ function formatMessagesWithCommands(messages: MessageInRow[], nativeSlashCommand
   return parts.join('\n\n');
 }
 
-function runtimePolicyForMessages(messages: MessageInRow[]): RuntimePolicy | undefined {
-  return messages.some(isPublicGuestMessage) ? 'public_guest_k8s' : undefined;
-}
-
-function isPublicGuestMessage(message: MessageInRow): boolean {
-  if (message.kind !== 'chat' && message.kind !== 'chat-sdk') return false;
-  try {
-    const content = JSON.parse(message.content) as { senderTrust?: unknown };
-    return content.senderTrust === 'public_guest';
-  } catch {
-    return false;
-  }
-}
-
 interface QueryResult {
   continuation?: string;
 }
@@ -318,7 +313,6 @@ async function processQuery(
   routing: RoutingContext,
   initialBatchIds: string[],
   providerName: string,
-  runtimePolicy: RuntimePolicy | undefined,
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
   let done = false;
@@ -358,20 +352,18 @@ async function processQuery(
           return;
         }
 
-        // Skip system messages (MCP tool responses) and /clear (needs fresh query).
+        // Skip system messages (MCP tool responses).
         // Thread routing is the router's concern — if a message landed in this
         // session, the agent should see it. Per-thread sessions already isolate
         // threads into separate containers; shared sessions intentionally merge
         // everything. Filtering on thread_id here caused deadlocks when the
         // initial batch and follow-ups had mismatched thread_ids (e.g. a
         // host-generated welcome trigger with null thread vs a Discord DM reply).
-        const newMessages = pending.filter((m) => {
-          if (m.kind === 'system') return false;
-          if ((m.kind === 'chat' || m.kind === 'chat-sdk') && isClearCommand(m)) return false;
-          if (runtimePolicy !== 'public_guest_k8s' && isPublicGuestMessage(m)) return false;
-          return true;
-        });
+        const newMessages = pending.filter((m) => m.kind !== 'system');
         if (newMessages.length === 0) return;
+
+        const newIds = newMessages.map((m) => m.id);
+        markProcessing(newIds);
 
         // Run pre-task scripts on follow-ups too — without this, a task that
         // arrives during an active query (e.g. a */10 monitoring cron) bypasses
@@ -453,11 +445,7 @@ async function processQuery(
         // container died between `init` and `result`, the SDK session was
         // effectively orphaned and the next message started a blank
         // Claude session with no prior context.
-        try {
-          setContinuation(providerName, event.continuation);
-        } catch (err) {
-          log(`Failed to persist continuation: ${err instanceof Error ? err.message : String(err)}`);
-        }
+        setContinuation(providerName, event.continuation);
       } else if (event.type === 'result') {
         // A result — with or without text — means the turn is done. Mark
         // the initial batch completed now so the host sweep doesn't see
@@ -465,11 +453,7 @@ async function processQuery(
         // follow-up pushes. The agent may have responded via MCP
         // (send_message) mid-turn, or the message may not need a response
         // at all — either way the turn is finished.
-        try {
-          markCompleted(initialBatchIds);
-        } catch (err) {
-          log(`Failed to mark initial batch completed: ${err instanceof Error ? err.message : String(err)}`);
-        }
+        markCompleted(initialBatchIds);
         if (event.text) {
           const { hasUnwrapped } = dispatchResultText(event.text, routing);
           if (hasUnwrapped && !unwrappedNudged) {
