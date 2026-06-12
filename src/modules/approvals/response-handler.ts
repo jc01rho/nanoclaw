@@ -1,10 +1,16 @@
 /**
  * Handle an admin's response to an approval card.
  *
- * DB-backed pending_approvals: the module called `requestApproval()` with
- * some free-form `action` string and registered a handler via
- * `registerApprovalHandler(action, handler)`. On approve, we look up the
- * handler and call it; on reject, we notify the agent and move on.
+ * Two categories of pending_approvals rows exist:
+ *   1. Module-initiated actions — the module called `requestApproval()` with
+ *      some free-form `action` string and registered a handler via
+ *      `registerApprovalHandler(action, handler)`. On approve, we look up the
+ *      handler and call it; on reject, we notify the agent and move on.
+ *   2. OneCLI credential approvals (`action = 'onecli_credential`). Resolved
+ *      via an in-memory Promise — see onecli-approvals.ts.
+ *
+ * The response handler is registered via core's `registerResponseHandler`;
+ * core iterates handlers and the first one to return `true` claims the response.
  */
 import { wakeContainer } from '../../container-runner.js';
 import { deletePendingApproval, getPendingApproval, getSession } from '../../db/sessions.js';
@@ -12,13 +18,33 @@ import type { ResponsePayload } from '../../response-registry.js';
 import { log } from '../../log.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import type { PendingApproval } from '../../types.js';
-import { getApprovalHandler } from './primitive.js';
+import { hasAdminPrivilege, isGlobalAdmin, isOwner } from '../permissions/db/user-roles.js';
+import { getApprovalHandler, notifyApprovalResolved } from './primitive.js';
+
+const ONECLI_ACTION = 'onecli_credential';
 
 export async function handleApprovalsResponse(payload: ResponsePayload): Promise<boolean> {
   const approval = getPendingApproval(payload.questionId);
   if (!approval) return false;
 
-  await handleRegisteredApproval(approval, payload.value, payload.userId ?? '');
+  if (!isAuthorizedApprovalClick(approval, payload)) {
+    log.warn('Ignoring unauthorized approval response', {
+      approvalId: approval.approval_id,
+      action: approval.action,
+      userId: payload.userId,
+      channelType: payload.channelType,
+    });
+    return true;
+  }
+
+  if (approval.action === ONECLI_ACTION) {
+    // OneCLI is disabled — just drop the row
+    log.warn('OneCLI approval received but OneCLI is disabled', { approvalId: approval.approval_id });
+    deletePendingApproval(payload.questionId);
+    return true;
+  }
+
+  await handleRegisteredApproval(approval, payload.value, namespacedUserId(payload) ?? '');
   return true;
 }
 
@@ -53,6 +79,7 @@ async function handleRegisteredApproval(
     notify(`Your ${approval.action} request was rejected by admin.`);
     log.info('Approval rejected', { approvalId: approval.approval_id, action: approval.action, userId });
     deletePendingApproval(approval.approval_id);
+    await notifyApprovalResolved({ approval, session, outcome: 'reject', userId });
     await wakeContainer(session);
     return;
   }
@@ -66,13 +93,14 @@ async function handleRegisteredApproval(
     });
     notify(`Your ${approval.action} was approved, but no handler is installed to apply it.`);
     deletePendingApproval(approval.approval_id);
+    await notifyApprovalResolved({ approval, session, outcome: 'approve', userId });
     await wakeContainer(session);
     return;
   }
 
-  const payload = JSON.parse(approval.payload);
+  const parsedPayload = JSON.parse(approval.payload);
   try {
-    await handler({ session, payload, userId, notify });
+    await handler({ session, payload: parsedPayload, userId, notify });
     log.info('Approval handled', { approvalId: approval.approval_id, action: approval.action, userId });
   } catch (err) {
     log.error('Approval handler threw', { approvalId: approval.approval_id, action: approval.action, err });
@@ -82,5 +110,25 @@ async function handleRegisteredApproval(
   }
 
   deletePendingApproval(approval.approval_id);
+  await notifyApprovalResolved({ approval, session, outcome: 'approve', userId });
   await wakeContainer(session);
+}
+
+function namespacedUserId(payload: ResponsePayload): string | null {
+  if (!payload.userId) return null;
+  return payload.userId.includes(':') ? payload.userId : `${payload.channelType}:${payload.userId}`;
+}
+
+function isAuthorizedApprovalClick(approval: PendingApproval, payload: ResponsePayload): boolean {
+  const userId = namespacedUserId(payload);
+  if (!userId) return false;
+
+  const agentGroupId =
+    approval.agent_group_id ?? (approval.session_id ? getSession(approval.session_id)?.agent_group_id : null);
+
+  if (!agentGroupId) {
+    return isOwner(userId) || isGlobalAdmin(userId);
+  }
+
+  return hasAdminPrivilege(userId, agentGroupId);
 }
