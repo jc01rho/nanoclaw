@@ -13,7 +13,7 @@ import { migration013 } from './013-report-policy.js';
 import { migration014 } from './014-approval-render-metadata.js';
 import { migration015 } from './015-container-configs.js';
 import { migration016 } from './016-cli-scope.js';
-import { migration017 } from './016-messaging-group-instance.js';
+import { migration016 as migration017 } from './016-messaging-group-instance.js';
 import { moduleApprovalsPendingApprovals } from './module-approvals-pending-approvals.js';
 import { moduleApprovalsTitleOptions } from './module-approvals-title-options.js';
 
