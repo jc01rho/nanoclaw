@@ -19,6 +19,7 @@ const STEPS: Record<string, () => Promise<{ run: (args: string[]) => Promise<voi
   service: () => import('./service.js'),
   verify: () => import('./verify.js'),
   auth: () => import('./auth.js'),
+  'provider-auth': () => import('./provider-auth.js'),
   'cli-agent': () => import('./cli-agent.js'),
 };
 
