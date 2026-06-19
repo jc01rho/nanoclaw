@@ -480,24 +480,6 @@ async function buildContainerArgs(
     }
   }
 
-  // OneCLI gateway — injects HTTPS_PROXY + certs so container API calls
-  // are routed through the agent vault for credential injection, and mounts
-  // any credential stubs the gateway serves (e.g. a sentinel auth file).
-  // Runs AFTER the volume mounts so a stub nested inside one of our mounts
-  // (a parent dir mounted RW above it) lands later in the args and isn't
-  // shadowed by it. Treated as a transient hard failure: if we can't wire
-  // the gateway, we don't spawn. The caller (router or host-sweep) catches
-  // the throw, leaves the inbound message pending, and the next sweep tick
-  // retries.
-  if (agentIdentifier) {
-    await onecli.ensureAgent({ name: agentGroup.name, identifier: agentIdentifier });
-  }
-  const onecliApplied = await onecli.applyContainerConfig(args, { addHostMapping: false, agent: agentIdentifier });
-  if (!onecliApplied) {
-    throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
-  }
-  log.info('OneCLI gateway applied', { containerName });
-
   // Override entrypoint: run v2 entry point directly via Bun (no tsc, no stdin).
   args.push('--entrypoint', 'bash');
 
