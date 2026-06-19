@@ -36,7 +36,14 @@ export function resolveTimezone(tz: string): string {
  * Falls back to UTC if the timezone is invalid.
  */
 export function formatLocalTime(utcIso: string, timezone: string): string {
-  const date = new Date(utcIso);
+  // SQLite datetime('now') stores UTC without a trailing 'Z'. When the
+  // container has TZ set, new Date() interprets the naive string as local
+  // wall-clock time, so toLocaleString({ timeZone }) becomes a no-op and
+  // the displayed time silently matches the UTC value. Append 'Z' to
+  // timezoneless strings so they parse as UTC — matches host-sweep.ts
+  // parseSqliteUtc behaviour on the other side of the DB boundary.
+  const hasOffset = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(utcIso.trim());
+  const date = new Date(hasOffset ? utcIso : utcIso + 'Z');
   return date.toLocaleString('en-US', {
     timeZone: resolveTimezone(timezone),
     year: 'numeric',
