@@ -2,8 +2,8 @@
 name: xiaomi-mone-k8s-troubleshoot
 description: |
   WHAT: Kubernetes 클러스터 트러블슈팅 자동화 스킬. Pod/컨테이너 검색, 명령 실행, 이벤트 분석, 리소스 상태 요약을 안전하게 수행한다.
-  WHEN: Kubernetes 클러스터에서 Pod 오류 진단, 라벨 기반 검색, Pod 내 명령 실행(exec), CrashLoopBackOff/OOMKilled 분석이 필요할 때 사용.
-  KEYWORDS: kubernetes, k8s, pod, troubleshoot, search, exec, label-selector, namespace, container, smartsre, diagnosis, debug, mone
+  WHEN: Kubernetes 클러스터에서 Pod 오류 진단, 라벨 기반 검색, Pod 내 명령 실행(exec), CrashLoopBackOff/OOMKilled 분석, 2일 이상 Error 상태 Pod 정리가 필요할 때 사용.
+  KEYWORDS: kubernetes, k8s, pod, troubleshoot, search, exec, cleanup, label-selector, namespace, container, smartsre, diagnosis, debug, mone
 license: Apache-2.0
 metadata:
   provenance: |
@@ -49,6 +49,7 @@ compatibility: |
 |----------|------|
 | `scripts/search_pods.py` | Pod 검색 (라벨/네임스페이스) → JSON 반환 |
 | `scripts/exec_pod.py` | Pod 내 명령 실행 → JSON 반환 (셸 메타문자 거부) |
+| `scripts/cleanup_pods.py` | 2일+ Error/CrashLoopBackOff Pod 식별 및 삭제 → JSON 반환 |
 
 ---
 
@@ -139,6 +140,57 @@ python3 scripts/exec_pod.py -p myapp-7d9f8b-xk2lp -n production -c sidecar -cmd 
 
 ---
 
+### Error Pod 정리 (`cleanup_pods.py`)
+
+지정된 임계값(기본 48시간) 이상 `Error`/`CrashLoopBackOff`/`ImagePullBackOff`/`Evicted`/`Failed` 상태인 Pod를 식별하여 삭제합니다.
+
+```bash
+# 전체 네임스페이스에서 2일+ Error Pod 조회 (삭제 X)
+python3 scripts/cleanup_pods.py -n all --dry-run
+
+# production 네임스페이스에서 2일+ Error Pod 삭제
+python3 scripts/cleanup_pods.py -n production
+
+# 라벨 셀렉터로 제한, 임계값 72시간
+python3 scripts/cleanup_pods.py -l app=myapp -n staging --max-age-hours 72
+```
+
+**옵션:**
+
+| 플래그 | 설명 |
+|--------|------|
+| `-n`, `--namespace` | 네임스페이스. `all` 지정 시 전체 네임스페이스 검색 (기본값: `all`) |
+| `-l`, `--label-selector` | 라벨 셀렉터 (예: `app=myapp`, `app=myapp,env=prod`) |
+| `--max-age-hours` | 이 시간 이상 Error 상태인 Pod만 삭제 (기본값: `48`) |
+| `--dry-run` | 삭제하지 않고 대상 Pod만 출력 |
+
+**JSON 출력 형식:**
+```json
+{
+  "ok": true,
+  "namespace": "all",
+  "maxAgeHours": 48,
+  "dryRun": true,
+  "staleCount": 1,
+  "deletedCount": 0,
+  "failedCount": 0,
+  "deleted": [
+    {
+      "namespace": "production",
+      "name": "myapp-7d9f8b-xk2lp",
+      "phase": "Error",
+      "reason": "",
+      "startTime": "2024-06-20T09:00:00+00:00",
+      "ageHours": 56.3,
+      "dryRun": true
+    }
+  ],
+  "failed": []
+}
+```
+
+---
+
 ## 보안 제약사항
 
 자세한 내용은 [`references/SECURITY.md`](references/SECURITY.md)를 참조하십시오.
@@ -173,6 +225,13 @@ exec 포함 시 추가:
     verbs: ["create"]
 ```
 
+cleanup(delete) 포함 시 추가:
+```yaml
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+```
+
 ### kubeconfig 마운트
 
 kubeconfig는 NanoClaw 마운트 허용목록을 통해서만 주입해야 합니다:
@@ -190,7 +249,7 @@ kubeconfig는 NanoClaw 마운트 허용목록을 통해서만 주입해야 합�
 ### CrashLoopBackOff 진단
 ```bash
 # 1. 문제 Pod 찾기
-python3 scripts/k8s_search.py -l app=myapp -n production
+python3 scripts/search_pods.py -l app=myapp -n production
 
 # 2. kubectl로 상세 확인
 kubectl describe pod <POD_NAME> -n production
@@ -199,7 +258,7 @@ kubectl describe pod <POD_NAME> -n production
 kubectl logs <POD_NAME> -n production --previous
 
 # 4. 환경변수 확인 (exec)
-python3 scripts/k8s_exec.py -p <POD_NAME> -n production -cmd "env"
+python3 scripts/exec_pod.py -p <POD_NAME> -n production -cmd "env"
 ```
 
 ### OOMKilled 분석
@@ -214,7 +273,19 @@ kubectl get pod <POD_NAME> -n production -o jsonpath='{.spec.containers[*].resou
 ### 멀티 네임스페이스 검색
 ```bash
 # 전체 네임스페이스에서 라벨로 검색
-python3 scripts/k8s_search.py -l app=myapp -n all
+python3 scripts/search_pods.py -l app=myapp -n all
+```
+
+### 2일 이상 Error Pod 정기 정리
+```bash
+# 1. dry-run으로 대상 확인
+python3 scripts/cleanup_pods.py -n all --dry-run
+
+# 2. 실제 삭제 실행
+python3 scripts/cleanup_pods.py -n all
+
+# 3. 특정 라벨만 정리
+python3 scripts/cleanup_pods.py -l app=myapp -n production --max-age-hours 48
 ```
 
 ---
@@ -231,13 +302,14 @@ python3 scripts/k8s_search.py -l app=myapp -n all
 ## 관련 문서
 
 - [`references/SECURITY.md`](references/SECURITY.md) — 보안 감사 결과 및 제약사항
-- [`scripts/k8s_search.py`](scripts/k8s_search.py) — Pod 검색 스크립트
-- [`scripts/k8s_exec.py`](scripts/k8s_exec.py) — Pod exec 스크립트
+- [`scripts/search_pods.py`](scripts/search_pods.py) — Pod 검색 스크립트
+- [`scripts/exec_pod.py`](scripts/exec_pod.py) — Pod exec 스크립트
+- [`scripts/cleanup_pods.py`](scripts/cleanup_pods.py) — 2일+ Error Pod 정리 스크립트
 - [SkillHub: xiaomi-mone-k8s-troubleshoot](https://www.skillhub.club/skills/xiaomi-mone-k8s-troubleshoot)
 - 업스트림 경로: `jcommon/mcp/mcp-smartsre/.claude/skills/k8s-troubleshoot/`
 
 ---
 
-**버전**: 1.0.1  
+**버전**: 1.1.0  
 **라이선스**: Apache-2.0  
 **호환성**: kubectl v1.20+, Python 3.8+, Kubernetes v1.20+
