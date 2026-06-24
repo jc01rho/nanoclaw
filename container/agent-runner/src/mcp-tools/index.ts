@@ -16,6 +16,18 @@ function log(msg: string): void {
   console.error(`[mcp-tools] ${msg}`);
 }
 
+// CRITICAL: Every tool handler is declared async, so a thrown exception
+// becomes an unhandled promise rejection. Without process-level handlers:
+// - The MCP server child process dies (Claude SDK does not auto-restart)
+// - Every mcp__nanoclaw__* tool becomes unresponsive until the agent group is restarted
+process.on('uncaughtException', (err) => {
+  log(`Uncaught exception in MCP server: ${err.message}`);
+});
+
+process.on('unhandledRejection', (reason) => {
+  log(`Unhandled rejection in MCP server: ${reason instanceof Error ? reason.message : String(reason)}`);
+});
+
 startMcpServer().catch((err) => {
   log(`MCP server error: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);

@@ -55,9 +55,24 @@ export async function startMcpServer(): Promise<void> {
     const { name, arguments: args } = request.params;
     const tool = toolMap.get(name);
     if (!tool) {
-      return { content: [{ type: 'text', text: `Unknown tool: ${name}` }] };
+      return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
     }
-    return tool.handler(args ?? {});
+    // Wrap handler in try-catch: any throw here becomes an unhandled
+    // promise rejection, which (without a process-level handler) takes
+    // down the MCP server child process — and Claude SDK does not
+    // auto-restart it, so every mcp__nanoclaw__* tool goes dark until
+    // the agent group is restarted. Catch and surface as a tool error
+    // so the server stays alive.
+    try {
+      return await tool.handler(args ?? {});
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`Tool "${name}" threw: ${message}`);
+      return {
+        content: [{ type: 'text', text: `Error in ${name}: ${message}` }],
+        isError: true,
+      };
+    }
   });
 
   const transport = new StdioServerTransport();
