@@ -267,8 +267,8 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 - `ag-report-1777209216082-m2bg59` — Report Evaluator (folder: `report-evaluator`)
 
 **Scheduled tasks (Terminal Agent session `sess-1776948708350-1eehxg`):**
-- 평일 09:00 KST (UTC 00:00): k8s 클러스터 점검 + 2일 이상 error pod 삭제 (`0 0 * * 1-5`)
-- 평일 18:00 KST (UTC 09:00): k8s 클러스터 점검 + 2일 이상 error pod 삭제 (`0 9 * * 1-5`)
+- 평일 09:00 KST (UTC 00:00): k8s 클러스터 점검 + 2일 이상 error pod 삭제 (`0 0 * * 1-5`) — 정상(모든 노드 Ready·삭제 0건·핵심 서비스 Running·Warning 없음)이면 Discord 무발송, 이상/삭제 시에만 보고
+- 평일 18:00 KST (UTC 09:00): k8s 클러스터 점검 + 2일 이상 error pod 삭제 (`0 9 * * 1-5`) — 정상이면 Discord 무발송, 이상/삭제 시에만 보고
 - 주말 04:00 UTC (KST 13:00): MongoDB compact (`0 4 * * 0,6`)
 - 주말 05:00 UTC (KST 14:00): Longhorn volume trim (`0 5 * * 0,6`)
 
