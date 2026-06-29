@@ -251,6 +251,36 @@ Check these first when something goes wrong:
 
 Note: container logs are lost after the container exits (`--rm` flag). If the agent silently failed inside the container, there's no persistent log to inspect.
 
+## Deployment
+
+**Production server:** `192.168.30.129` (macOS, Darwin 23.2.0)  
+**User:** `whrho` — `ssh whrho@192.168.30.129`  
+**NanoClaw path:** `/Users/whrho/git/nanoclaw/`  
+**ncl:** `~/git/nanoclaw/bin/ncl` (not in PATH by default)  
+**Service:** `launchctl` — `com.nanoclaw` — restartable with:
+```bash
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+```
+
+**Agent groups:**
+- `ag-1776935410762-tercl4` — Terminal Agent (folder: `cli-with-whrho`)
+- `ag-report-1777209216082-m2bg59` — Report Evaluator (folder: `report-evaluator`)
+
+**Scheduled tasks (Terminal Agent session `sess-1776948708350-1eehxg`):**
+- 평일 09:00 KST (UTC 00:00): k8s 클러스터 점검 + 2일 이상 error pod 삭제 (`0 0 * * 1-5`)
+- 평일 18:00 KST (UTC 09:00): k8s 클러스터 점검 + 2일 이상 error pod 삭제 (`0 9 * * 1-5`)
+- 주말 04:00 UTC (KST 13:00): MongoDB compact (`0 4 * * 0,6`)
+- 주말 05:00 UTC (KST 14:00): Longhorn volume trim (`0 5 * * 0,6`)
+
+**Discord wirings (Terminal Agent):**
+- `mg-1776948558696-arnd7l` — 일반 채널 (discord:668427789807910931:668427790235860994)
+- `mg-1777200801520-i4wz2c` — Discord 1433492151982887044
+- `mg-1777260780-*` — Discord 1255740435112923176
+- `mg-1777206981480-4017j6` — 노우현 DM (discord:@me:1497936661860847718)
+
+**kubeconfig path inside container:** `/workspace/agent/kubeconfig`  
+**kubectl path inside container:** `/workspace/agent/kubectl`
+
 ## Supply Chain Security (pnpm)
 
 This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspace.yaml`. New package versions must exist on the npm registry for 3 days before pnpm will resolve them.
