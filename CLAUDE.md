@@ -267,10 +267,13 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 - `ag-report-1777209216082-m2bg59` — Report Evaluator (folder: `report-evaluator`)
 
 **Scheduled tasks (Terminal Agent session `sess-1776948708350-1eehxg`):**
-- 평일 09:10 KST (UTC 00:10): k8s 클러스터 점검 + 2일 이상 error pod 삭제 (`10 0 * * 1-5`) — 정상(모든 노드 Ready·삭제 0건·핵심 서비스 Running·Warning 없음)이면 Discord 무발송, 이상/삭제 시에만 보고
-- 평일 17:55 KST (UTC 08:55): k8s 클러스터 점검 + 2일 이상 error pod 삭제 (`55 8 * * 1-5`) — 정상이면 Discord 무발송, 이상/삭제 시에만 보고
-- 주말 04:00 UTC (KST 13:00): MongoDB compact (`0 4 * * 0,6`)
-- 주말 05:00 UTC (KST 14:00): Longhorn volume trim (`0 5 * * 0,6`)
+
+> ⚠️ recurrence cron은 호스트 TIMEZONE(Asia/Seoul) 기준으로 파싱된다 (`src/modules/scheduling/recurrence.ts`). cron 필드의 시각은 곧 KST다 — UTC로 변환하지 말 것.
+
+- 평일 09:10 KST: k8s 클러스터 점검 + 2일 이상 error pod 삭제 (`10 9 * * 1-5`) — 정상(모든 노드 Ready·삭제 0건·핵심 서비스 Running·Warning 없음)이면 Discord 무발송, 이상/삭제 시에만 보고
+- 평일 17:55 KST: k8s 클러스터 점검 + 2일 이상 error pod 삭제 (`55 17 * * 1-5`) — 정상이면 Discord 무발송, 이상/삭제 시에만 보고
+- 주말 04:00 KST: MongoDB compact (`0 4 * * 0,6`)
+- 주말 05:00 KST: Longhorn volume trim (`0 5 * * 0,6`)
 
 **Discord wirings (Terminal Agent):**
 - `mg-1776948558696-arnd7l` — 일반 채널 (discord:668427789807910931:668427790235860994)
