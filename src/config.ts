@@ -16,6 +16,8 @@ const envConfig = readEnvFile([
   'ANTHROPIC_MODEL',
   'OLLAMA_HOST',
   'OLLAMA_ADMIN_TOOLS',
+  'ONECLI_URL',
+  'ONECLI_API_KEY',
   'TZ',
 ]);
 
@@ -52,6 +54,8 @@ export const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || envConfig.ANTH
 export const ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN || envConfig.ANTHROPIC_AUTH_TOKEN;
 export const CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN || envConfig.CLAUDE_CODE_OAUTH_TOKEN;
 export const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || envConfig.ANTHROPIC_MODEL || 'mimo-v2.5-pro';
+export const ONECLI_URL = process.env.ONECLI_URL || envConfig.ONECLI_URL;
+export const ONECLI_API_KEY = process.env.ONECLI_API_KEY || envConfig.ONECLI_API_KEY;
 export const MAX_MESSAGES_PER_PROMPT = Math.max(1, parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10);
 export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
 export const MAX_CONCURRENT_CONTAINERS = Math.max(1, parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5);
