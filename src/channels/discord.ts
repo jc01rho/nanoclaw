@@ -22,33 +22,17 @@ registerChannelAdapter('discord', {
   factory: () => {
     const env = readEnvFile(['DISCORD_BOT_TOKEN', 'DISCORD_PUBLIC_KEY', 'DISCORD_APPLICATION_ID']);
     if (!env.DISCORD_BOT_TOKEN) return null;
-    const botUserId = decodeDiscordBotUserId(env.DISCORD_BOT_TOKEN);
     const discordAdapter = createDiscordAdapter({
       botToken: env.DISCORD_BOT_TOKEN,
       publicKey: env.DISCORD_PUBLIC_KEY,
       applicationId: env.DISCORD_APPLICATION_ID,
     });
-    (discordAdapter as unknown as { botUserId?: string; applicationId?: string }).botUserId = botUserId;
-    (discordAdapter as unknown as { botUserId?: string; applicationId?: string }).applicationId =
-      env.DISCORD_APPLICATION_ID;
     return createChatSdkBridge({
       adapter: discordAdapter,
       concurrency: 'concurrent',
       botToken: env.DISCORD_BOT_TOKEN,
-      ignoredAuthorIds: [env.DISCORD_APPLICATION_ID, botUserId].filter((v): v is string => Boolean(v)),
       extractReplyContext,
       supportsThreads: true,
-      maxTextLength: 2000,
     });
   },
 });
-
-function decodeDiscordBotUserId(token: string): string | undefined {
-  const first = token.split('.')[0];
-  if (!first) return undefined;
-  try {
-    return Buffer.from(first, 'base64').toString('utf8');
-  } catch {
-    return undefined;
-  }
-}
