@@ -17,24 +17,29 @@ flowchart TB
     Bridge["Chat SDK Bridge<br/>(src/channels/chat-sdk-bridge.ts)"]
     Router["Router<br/>(src/router.ts)<br/>platformId + threadId -> messaging_group -> agent_group -> session"]
     SessMgr["Session Manager<br/>(src/session-manager.ts)<br/>creates inbound.db + outbound.db"]
-    Runner["Container Runner<br/>(src/container-runner.ts)<br/>direct env wiring + spawn"]
+    Runner["Container Runner<br/>(src/container-runner.ts)<br/>OneCLI ensureAgent + spawn"]
     Delivery["Delivery Poller<br/>(src/delivery.ts)<br/>1s active / 60s sweep"]
     Sweep["Host Sweep<br/>(src/host-sweep.ts)<br/>heartbeat, retry, recurrence"]
     Central[("Central DB<br/>data/v2.db<br/>agent_groups<br/>messaging_groups<br/>messaging_group_agents<br/>sessions<br/>pending_approvals")]
   end
 
+  subgraph OneCLI["OneCLI Gateway"]
+    Vault["Agent Vault<br/>secrets + OAuth"]
+    Approvals["configureManualApproval<br/>-> pending_approvals"]
+  end
+
   subgraph Session["Per-Session Container (Docker / Apple Container)"]
     direction TB
     PollLoop["Poll Loop<br/>(container/agent-runner)"]
-    Provider["Agent providers<br/>(claude, opencode, mock; todo: codex)"]
-    MCP["MCP Tools<br/>send_message, send_file, edit_message,<br/>add_reaction, send_card, ask_user_question,<br/>schedule_task, create_agent,<br/>install_packages, add_mcp_server"]
+    Provider["Agent providers<br/>(claude — the only one registered in trunk;<br/>opencode ships via the /add-opencode skill)"]
+    MCP["MCP Tools<br/>send_message, send_file, edit_message,<br/>add_reaction, send_card, ask_user_question,<br/>create_agent, install_packages, add_mcp_server<br/>CLI: ncl tasks"]
     Skills["Container Skills<br/>(container/skills/)"]
-    InDB[("inbound.db<br/>host writes<br/>even seq<br/>messages_in<br/>destinations<br/>processing_ack")]
-    OutDB[("outbound.db<br/>container writes<br/>odd seq<br/>messages_out<br/>heartbeat file")]
+    InDB[("inbound.db<br/>host writes<br/>even seq<br/>messages_in<br/>delivered<br/>destinations<br/>session_routing")]
+    OutDB[("outbound.db<br/>container writes<br/>odd seq<br/>messages_out<br/>processing_ack<br/>session_state<br/>container_state<br/>heartbeat file")]
   end
 
   subgraph Groups["Agent Group Filesystem (groups/*)"]
-    Folder["CLAUDE.md<br/>memory<br/>per-group skills<br/>container_config"]
+    Folder["CLAUDE.md<br/>memory<br/>per-group skills<br/>container.json (materialized from container_configs)"]
   end
 
   P1 & P2 & P3 & P4 & P5 --> Bridge
@@ -43,6 +48,7 @@ flowchart TB
   Router --> SessMgr
   SessMgr --> InDB
   SessMgr --> Runner
+  Runner --> OneCLI
   Runner --> PollLoop
   PollLoop --> InDB
   PollLoop --> Provider
@@ -57,7 +63,9 @@ flowchart TB
   Sweep --> OutDB
   Sweep --> Central
   Runner -.mounts.-> Folder
-  Provider -.API calls.-> P5
+  MCP -.approval.-> Approvals
+  Approvals --> Central
+  Provider -.API calls.-> Vault
 ```
 
 ## Message Flow (inbound -> agent -> outbound)
@@ -132,7 +140,6 @@ erDiagram
     string name
     string folder
     string agent_provider
-    json container_config
   }
   messaging_groups {
     int id
@@ -165,14 +172,15 @@ erDiagram
     int messaging_group_id
     int agent_group_id
     string session_mode "agent-shared | shared | per-thread"
-    json trigger_rules
+    string engage_mode "pattern | mention | mention-sticky"
+    string sender_scope "all | known"
     int priority
   }
   sessions {
     int id
     int agent_group_id
     int messaging_group_id
-    string sdk_session_id
+    string thread_id
     string status
   }
 ```
@@ -201,7 +209,7 @@ flowchart LR
   Container -->|"writes only<br/>(odd seq)"| Out
   Container -->|touch every poll| HB
   HostSweep[Host sweep] -->|stat mtime| HB
-  HostSweep -->|reads processing_ack| In
+  HostSweep -->|reads processing_ack| Out
 
   note1["Each file has exactly ONE writer.<br/>Eliminates SQLite cross-process write contention.<br/>Collision-free seq numbering."]
 ```

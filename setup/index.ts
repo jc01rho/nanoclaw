@@ -21,6 +21,8 @@ const STEPS: Record<string, () => Promise<{ run: (args: string[]) => Promise<voi
   auth: () => import('./auth.js'),
   'provider-auth': () => import('./provider-auth.js'),
   'cli-agent': () => import('./cli-agent.js'),
+  // >>> nanoclaw:setup-steps
+  // <<< nanoclaw:setup-steps
 };
 
 async function main(): Promise<void> {

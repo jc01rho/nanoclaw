@@ -42,8 +42,11 @@ export async function handleApprovalsResponse(payload: ResponsePayload): Promise
   }
 
   if (approval.action === ONECLI_ACTION) {
-    // OneCLI is disabled — just drop the row
-    log.warn('OneCLI approval received but OneCLI is disabled', { approvalId: approval.approval_id });
+    if (resolveOneCLIApproval(payload.questionId, payload.value)) {
+      return true;
+    }
+    // Row exists but the in-memory resolver is gone (timer fired or the process
+    // was in a weird state). Nothing to do — just drop the row.
     deletePendingApproval(payload.questionId);
     return true;
   }
@@ -107,9 +110,9 @@ async function handleRegisteredApproval(
     return;
   }
 
-  const parsedPayload = JSON.parse(approval.payload);
+  const parsedPayload = JSON.parse(approval.payload) as Record<string, unknown>;
   try {
-    await handler({ session, payload: parsedPayload, userId, notify });
+    await handler({ session, payload: parsedPayload, approval, userId, notify });
     log.info('Approval handled', { approvalId: approval.approval_id, action: approval.action, userId });
   } catch (err) {
     log.error('Approval handler threw', { approvalId: approval.approval_id, action: approval.action, err });

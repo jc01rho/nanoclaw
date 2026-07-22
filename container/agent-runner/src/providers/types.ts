@@ -1,5 +1,11 @@
 export type RuntimePolicy = 'default' | 'public_guest_k8s';
 
+export interface MemorySessionHookRegistration {
+  readonly command: string;
+  readonly legacyCommands: readonly string[];
+  readonly sources: readonly string[];
+}
+
 export interface AgentProvider {
   /**
    * True if the provider's underlying SDK handles slash commands natively and
@@ -8,13 +14,8 @@ export interface AgentProvider {
    */
   readonly supportsNativeSlashCommands: boolean;
 
-  /**
-   * Optional. When true, the runner scaffolds a persistent `memory/` tree in the
-   * agent's workspace at boot. Providers with their own native memory (e.g.
-   * Claude's `CLAUDE.local.md`) omit this and get nothing — memory is opt-in per
-   * provider, never gated on a provider name.
-   */
-  readonly usesMemoryScaffold?: boolean;
+  /** Register shared memory through the provider's native session-start mechanism. */
+  registerMemorySessionHook(hook: MemorySessionHookRegistration): void;
 
   /**
    * Optional. Called by the poll-loop after each completed exchange (a
@@ -98,15 +99,12 @@ export interface QueryInput {
   cwd: string;
 
   /**
-   * System context to inject. Providers translate this into whatever the
+   * System context to inject. Providers translate this into whatever their
    * SDK expects (preset append, full system prompt, per-turn injection…).
    */
   systemContext?: {
     instructions?: string;
   };
-
-  /** Optional per-turn tool/runtime policy override. */
-  runtimePolicy?: RuntimePolicy;
 }
 
 export interface McpServerConfig {
